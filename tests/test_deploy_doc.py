@@ -170,6 +170,29 @@ def test_deploy_sh_survives_a_nonzero_is_active():
     assert 'systemctl is-active "$UNIT" || true' in DEPLOY_SH
 
 
+def test_git_runs_as_the_repo_owner():
+    """服务器上的 git 必须以**仓库所有者（yuque）**的身份跑。
+
+    `deploy.sh` 是 root 执行的，但检出归 yuque、部署密钥也在 `/home/yuque/.ssh`。
+    root 直接跑 git 会先撞 dubious ownership，再撞 `Host key verification failed`
+    —— 于是 `fetch` 失败、脚本退回「按当前 HEAD 继续」，**部署的其实是旧 commit**。
+    实测踩到过：测试跑的是旧代码、装的是旧单元，而脚本一路说「完成」。
+    """
+    for script, name in ((DEPLOY_SH, "deploy.sh"), (SYNC_SH, "sync-server.sh")):
+        for line in _code_lines(script).splitlines():
+            if "git -C" not in line:
+                continue
+            assert "sudo -u yuque" in line, f"{name} 里有不以 yuque 身份跑的 git：{line.strip()}"
+
+
+def test_deploy_sh_refuses_to_run_on_a_dirty_tree_before_anything_else():
+    """干净检查必须在**动任何东西之前**——否则半路失败会留下不一致的状态。"""
+    code = _code_lines(DEPLOY_SH)
+    dirty_pos = code.find("status --porcelain")
+    unit_pos = code.find("install -m 644")
+    assert 0 < dirty_pos < unit_pos
+
+
 def test_sync_server_refuses_to_run_on_the_production_checkout():
     assert "/opt/crb-agent" in SYNC_SH
     assert "生产机的检出" in SYNC_SH

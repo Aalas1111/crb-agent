@@ -78,15 +78,15 @@ else
 fi
 
 say "预检 3/3：生产机现在在哪个 commit"
-REMOTE_HEAD="$(ssh "$SERVER" "sudo git -C $REPO rev-parse HEAD")" || die "ssh 取不到生产机的 HEAD"
+REMOTE_HEAD="$(ssh "$SERVER" "sudo -u yuque git -C $REPO rev-parse HEAD")" || die "ssh 取不到生产机的 HEAD"
 printf '生产机 HEAD = %s\n' "${REMOTE_HEAD:0:7}"
 
 if [ "$REMOTE_HEAD" = "$LOCAL_SHA" ]; then
   echo "已经在目标 commit 上了，不需要传输"
 else
   say "先请生产机自己 fetch（干净路线，但它到 GitHub 时通时断）"
-  if ssh "$SERVER" "sudo timeout 45 git -C $REPO fetch origin" >/dev/null 2>&1; then
-    UPSTREAM_SHA="$(ssh "$SERVER" "sudo git -C $REPO rev-parse origin/$BRANCH" 2>/dev/null || true)"
+  if ssh "$SERVER" "sudo -u yuque timeout 45 git -C $REPO fetch origin" >/dev/null 2>&1; then
+    UPSTREAM_SHA="$(ssh "$SERVER" "sudo -u yuque git -C $REPO rev-parse origin/$BRANCH" 2>/dev/null || true)"
     if [ "$UPSTREAM_SHA" = "$LOCAL_SHA" ]; then
       echo "生产机取到 GitHub 了 ✓（deploy.sh 会自己快进）"
     elif [ -n "$UPSTREAM_SHA" ]; then
@@ -107,10 +107,10 @@ else
       git bundle create -q "$BUNDLE" "$BRANCH"
       scp -q "$BUNDLE" "$SERVER:/tmp/crba-sync.bundle"
       ssh "$SERVER" "sudo -u yuque git -C $REPO fetch /tmp/crba-sync.bundle $BRANCH >/dev/null &&
-                     sudo git -C $REPO merge --ff-only FETCH_HEAD" ||
+                     sudo -u yuque git -C $REPO merge --ff-only FETCH_HEAD" ||
         die "bundle 送过去之后合并失败（多半不是快进：生产机上有本地提交？）"
       ssh "$SERVER" "rm -f /tmp/crba-sync.bundle" || true
-      AFTER="$(ssh "$SERVER" "sudo git -C $REPO rev-parse HEAD")"
+      AFTER="$(ssh "$SERVER" "sudo -u yuque git -C $REPO rev-parse HEAD")"
       [ "$AFTER" = "$LOCAL_SHA" ] || die "送完之后生产机 HEAD = ${AFTER:0:7}，不是 ${LOCAL_SHA:0:7}"
       printf '生产机 HEAD 已是 %s ✓
 ' "${LOCAL_SHA:0:7}"

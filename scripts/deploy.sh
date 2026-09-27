@@ -28,6 +28,13 @@ LOCK="$STATE/.deploy.lock"
 WHO="${WHO:-$(whoami)@$(hostname -s)}"
 
 UNIT=crb-agent.service
+
+# ⚠️ 所有 git 操作都**以仓库所有者（yuque）的身份**跑。
+# 这个脚本是 root 执行的，但检出归 yuque、部署密钥也在 /home/yuque/.ssh ——
+# root 直接跑 git 会先撞 dubious ownership，再撞 `Host key verification failed`，
+# 于是 fetch 失败、退回「按当前 HEAD 继续」，**部署的其实是旧 commit**
+# （首次部署实测踩到：测试跑的是旧代码，很难看出来）。
+GIT=(sudo -u yuque git -C "$REPO")
 PORT="${CRBA_PORT:-8788}"
 
 say() { printf '\n== %s\n' "$*"; }
@@ -52,26 +59,26 @@ cd "$REPO"
 [ -f deploy/crb-agent.service ] || die "$REPO 看起来不是这个项目的检出"
 
 say "工作区必须干净（跟踪的文件）"
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-  git status --short --untracked-files=no >&2
+if [ -n "$("${GIT[@]}" status --porcelain --untracked-files=no)" ]; then
+  "${GIT[@]}" status --short --untracked-files=no >&2
   die "有未提交的改动：先提交或 stash。部署只走「上游里有的 commit」。"
 fi
-UNTRACKED="$(git ls-files --others --exclude-standard)"
+UNTRACKED="$("${GIT[@]}" ls-files --others --exclude-standard)"
 if [ -n "$UNTRACKED" ]; then
   # 未跟踪的常常是本地/机密文件（.env、草稿），不该逼人提交；但也不能装作没看见。
   printf '⚠ 有未跟踪文件（不影响本次部署，但请收拾）：\n%s\n' "$UNTRACKED"
 fi
 
 say "快进到上游"
-if timeout 45 git fetch origin; then
-  git merge --ff-only origin/main
+if timeout 45 "${GIT[@]}" fetch origin; then
+  "${GIT[@]}" merge --ff-only origin/main
 else
   # 这台机器到 GitHub 时通时不通（见 docs/deploy.md §5①）：取不到就按当前 HEAD
   # 部署，但要让人看见这件事，别假装同步过了。
   echo "⚠ 取不到 origin（网络问题？）—— 跳过快进，按当前 HEAD 继续"
 fi
-COMMIT="$(git rev-parse --short HEAD)"
-SUBJECT="$(git log -1 --pretty=%s)"
+COMMIT="$("${GIT[@]}" rev-parse --short HEAD)"
+SUBJECT="$("${GIT[@]}" log -1 --pretty=%s)"
 
 say "测试（HOME 关进临时目录）"
 SANDBOX="$(mktemp -d)"
