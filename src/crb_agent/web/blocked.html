@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>被学校风控拦了 · 教室借用</title>
+<link rel="stylesheet" href="/agent/static/style.css">
+</head>
+<body>
+<div class="center-page">
+  <div class="card">
+    <h1>被学校风控拦了</h1>
+    <p><strong>这不是登录态的问题——扫码没有用。</strong>
+       登录态是好的，服务器也能打开办事大厅的页面，
+       但学校对<strong>接口调用</strong>按出口 IP 拦：机房/数据中心的 IP 会被拒。</p>
+
+    <div id="detail" style="font-size:12.5px;color:#9aa3b2;background:#12151b;
+         border:1px solid #1e222b;border-radius:8px;padding:10px 12px;margin:0 0 16px">
+      正在读取详情…
+    </div>
+
+    <p style="font-size:13px;color:#9aa3b2">可以怎么办：</p>
+    <ul class="steps">
+      <li><strong>换一个出口</strong>：给服务配一个非机房的 HTTP 代理
+          （<code>HTTPS_PROXY</code>），让它从干净的 IP 出去。</li>
+      <li><strong>用浏览器插件</strong>：同学那个「活动工作台」在你自己的浏览器里跑，
+          出口就是你的网络，不受这条限制。</li>
+      <li><strong>把服务挪到干净的网络上</strong>（家宽 / 校园网里的机器）。</li>
+    </ul>
+
+    <button class="btn-ghost" id="btn-retry" type="button">重新检查</button>
+  </div>
+</div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+
+async function load() {
+  const box = $("detail");
+  try {
+    const status = await fetch("/agent/api/status").then((r) => r.json());
+    if (status.auth_ok) {
+      location.href = "/agent";
+      return;
+    }
+    box.textContent = `检测到：${status.detail || "（没有详情）"}`;
+  } catch (error) {
+    box.textContent = `读取详情失败：${error.message || error}`;
+  }
+}
+
+$("btn-retry").addEventListener("click", () => {
+  $("detail").textContent = "正在重新检查…";
+  void load();
+});
+void load();
+</script>
+</body>
+</html>

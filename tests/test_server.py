@@ -161,6 +161,50 @@ def test_status_api_reports_auth_state(settings, monkeypatch):
         assert client.get("/agent/api/status").json()["auth_ok"] is False
 
 
+def test_waf_block_explains_instead_of_bouncing_to_the_qr_page(settings, monkeypatch):
+    """被风控拦时**不能**跳扫码页 —— 扫码解决不了它（登录态本来就是好的）。
+
+    实测踩到：扫码成功、登录态写好了，但学校按出口 IP 拦接口调用（403）。
+    旧行为是把用户弹回扫码页 → 扫了又弹回来 → 死循环，而用户完全不知道为什么。
+    """
+    monkeypatch.setenv("FAKE_CRB_MODE", "waf")
+    app = build_app(settings)
+    with TestClient(app) as client:
+        client.get(f"/agent?key={KEY}")
+        response = client.get("/agent", follow_redirects=False)
+        assert response.status_code == 200, "不该重定向"
+        assert "风控" in response.text
+        assert "扫码没有用" in response.text
+
+
+def test_status_api_distinguishes_waf_from_not_logged_in(settings, monkeypatch):
+    monkeypatch.setenv("FAKE_CRB_MODE", "waf")
+    app = build_app(settings)
+    with TestClient(app) as client:
+        client.get(f"/agent?key={KEY}")
+        payload = client.get("/agent/api/status").json()
+        assert payload["auth_ok"] is False
+        assert payload["kind"] == "waf_blocked"
+        assert "扫码没用" in payload["detail"]
+
+    monkeypatch.setenv("FAKE_CRB_MODE", "noauth")
+    app = build_app(settings)
+    with TestClient(app) as client:
+        client.get(f"/agent?key={KEY}")
+        payload = client.get("/agent/api/status").json()
+        assert payload["kind"] == "not_logged_in"
+
+
+def test_not_logged_in_still_goes_to_the_qr_page(settings, monkeypatch):
+    monkeypatch.setenv("FAKE_CRB_MODE", "noauth")
+    app = build_app(settings)
+    with TestClient(app) as client:
+        client.get(f"/agent?key={KEY}")
+        response = client.get("/agent", follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "/agent/auth"
+
+
 def test_qr_page_is_reachable_with_key(settings, monkeypatch):
     monkeypatch.setenv("FAKE_CRB_MODE", "noauth")
     app = build_app(settings)

@@ -4,6 +4,49 @@
 > 本文只写「什么在哪里、怎么验、出事了怎么找」。
 > 动手前先读 [`principles.md`](principles.md) 与仓库根的 [`AGENTS.md`](../AGENTS.md)。
 
+## 0. ⚠️ 出口 IP 约束（2026-09-27 上机实测，**这条决定服务能不能用**）
+
+学校对办事大厅的**接口调用**按出口 IP 拦：
+
+| 出口 | 结果 |
+|---|---|
+| 机房 / 数据中心 IP（阿里云等） | **403** |
+| 家宽 / 校园网 IP | 正常 |
+
+**证据**（单变量对照，2026-09-27）：同一份登录态、同一份 `crb`、同样的请求头 ——
+
+```
+开发机（家宽）调用  crb doctor  → ok: true，拿到学期 2026-2027-1 与单位 400760
+生产机（阿里云）调用 crb doctor  → 退出码 3，403
+```
+
+而在生产机上：**打开页面是 200、调接口是 403**。所以**登录态是好的**，
+被拦的是「接口调用」这一层。换个 UA、先用 httpx 预热页面、换 curl
+（完全不同的 TLS 栈）都仍然是 403 —— 排除指纹类原因，只剩出口 IP。
+
+**所以：扫码解决不了它。** 界面上把两者分开了（`crb_status` 的 `kind`）：
+
+| `kind` | 界面行为 |
+|---|---|
+| `not_logged_in` | 跳到扫码页（这条扫码**有用**） |
+| `waf_blocked` | 显示一个说明页并讲清出路（**`/agent/auth` 不挂在这条路上**） |
+
+混成一句「登录态不可用」会让人对着解决不了的问题反复扫码 —— 实测踩过。
+
+**出路**（挑一条）：
+
+1. **给服务配一个非机房的出口**。`httpx` 默认读 `HTTPS_PROXY`，所以在单元里加一行即可：
+   ```
+   Environment=HTTPS_PROXY=http://<你的家宽/校园网代理>
+   ```
+   注意这个代理要能到 `ehallapp.nju.edu.cn` 与 `authserver.nju.edu.cn`。
+2. **把服务挪到干净的网络上**（家宽 / 校园网里的机器）。
+3. **用同学的浏览器插件**：它跑在用户自己的浏览器里，出口就是用户的网络，
+   天然不受这条限制（见 [`compat-browser-plugin.md`](compat-browser-plugin.md)）。
+
+> 代理配置好之后，`docs/design.md` §5 的扫码流程也会跟着走同一个出口 ——
+> 两边出口一致很重要，否则登录态与接口调用来自两个 IP，风控更容易起疑。
+
 ## 1. 目录布局
 
 | 路径 | 是什么 |
@@ -148,6 +191,16 @@ systemctl is-active crb-agent.service            # active
 journalctl -u crb-agent -n 20 --no-pager | grep "crba 已启动"
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/healthz        # 200
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/agent          # 403（不带密钥）
+```
+
+**接口真的通吗**（这一步才验得到 §0 那条约束，前面几条都验不到）：
+
+```bash
+sudo -u yuque env HOME=/home/yuque PATH=/home/yuque/.local/bin:/usr/local/bin:/usr/bin:/bin \
+    crb doctor --json; echo "退出码=$?"
+# 0  → 通
+# 2  → 没有登录态，扫码即可
+# 3  → 被风控拦（出口 IP 的问题，扫码没用）→ 回到 §0
 ```
 
 再打开 `http://<地址>:8788/agent?key=…`：

@@ -106,10 +106,18 @@ class AuthGate:
 
     def _probe(self) -> dict[str, Any]:
         outcome = self._toolbox.execute("crb_status", {})
+        data = outcome.data or {}
+        # kind 决定「下一步该做什么」：没登录 → 扫码；被风控拦 → 扫码**没用**。
+        # 把这两件事混成一句「登录态不可用」会让人对着一个解决不了的问题反复扫码。
+        if outcome.status == "ok":
+            kind = "ok"
+        else:
+            kind = str(data.get("kind") or "unknown")
         return {
             "ok": outcome.status == "ok",
+            "kind": kind,
             "detail": outcome.summary,
-            "data": outcome.data,
+            "data": data,
         }
 
 
@@ -229,10 +237,14 @@ async def _page(request: Request) -> Response:
         return blocked
     app = _state(request)
     status = await asyncio.to_thread(app.gate.status)
-    if not status.get("ok"):
-        # 登录态不可用：先去扫码，扫完再回来。
+    if status.get("ok"):
+        return HTMLResponse((WEB_DIR / "index.html").read_text(encoding="utf-8"))
+    if status.get("kind") == "not_logged_in":
+        # 没登录态 → 去扫码。
         return RedirectResponse("/agent/auth", status_code=302)
-    return HTMLResponse((WEB_DIR / "index.html").read_text(encoding="utf-8"))
+    # 其余（被风控拦 / 认不出的失败）**不要去扫码** —— 扫码解决不了它们，
+    # 会变成「扫了又被弹回扫码页」的死循环。给一个说清楚原因与出路的页面。
+    return HTMLResponse((WEB_DIR / "blocked.html").read_text(encoding="utf-8"))
 
 
 async def _auth_page(request: Request) -> Response:
@@ -277,6 +289,7 @@ async def _api_status(request: Request) -> Response:
     return JSONResponse(
         {
             "auth_ok": bool(status.get("ok")),
+            "kind": status.get("kind", "unknown"),
             "detail": status.get("detail", ""),
             "term": (status.get("data") or {}).get("term", ""),
             "model": app.settings.llm_model,

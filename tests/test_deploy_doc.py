@@ -193,6 +193,22 @@ def test_deploy_sh_refuses_to_run_on_a_dirty_tree_before_anything_else():
     assert 0 < dirty_pos < unit_pos
 
 
+def test_deploy_doc_documents_the_egress_ip_constraint():
+    """学校按**出口 IP** 拦接口调用 —— 这是这个服务能不能用的前提。
+
+    实测：同一份登录态、同一个 crb，开发机（家宽）调通、服务器（阿里云）403。
+    `tools._crb_status` 在 WAF 时会把用户指到这一节，所以它必须真的存在。
+    """
+    assert "出口 IP 约束" in DEPLOY_DOC
+    assert "waf_blocked" in DEPLOY_DOC
+    assert "HTTPS_PROXY" in DEPLOY_DOC
+
+
+def test_deploy_doc_acceptance_checks_the_api_not_just_the_port():
+    """只验「端口活着」验不到出口 IP 那条约束 —— 验收必须真调一次接口。"""
+    assert "crb doctor --json" in DEPLOY_DOC
+
+
 def test_sync_server_refuses_to_run_on_the_production_checkout():
     assert "/opt/crb-agent" in SYNC_SH
     assert "生产机的检出" in SYNC_SH

@@ -26,14 +26,20 @@ async function loadStatus() {
   try {
     const status = await getJson("/api/status");
     dot.className = `dot ${status.auth_ok ? "ok" : "bad"}`;
-    text.textContent = status.auth_ok
-      ? `${status.term || "学期未知"} · ${status.model}`
-      : "登录态失效，点这里重新登录";
-    text.parentElement.onclick = status.auth_ok
-      ? null
-      : () => {
-          location.href = "/agent/auth";
-        };
+    if (status.auth_ok) {
+      text.textContent = `${status.term || "学期未知"} · ${status.model}`;
+      text.parentElement.onclick = null;
+      return;
+    }
+    // 「没登录」和「出口被拦」要分开说 —— 后者的出路不是扫码。
+    if (status.kind === "waf_blocked") {
+      text.textContent = "学校风控拦了服务器出口（扫码没用）—— 点这里看原因";
+    } else {
+      text.textContent = "登录态失效，点这里重新登录";
+    }
+    text.parentElement.onclick = () => {
+      location.href = status.kind === "waf_blocked" ? "/agent" : "/agent/auth";
+    };
   } catch (error) {
     dot.className = "dot bad";
     text.textContent = String(error.message || error);

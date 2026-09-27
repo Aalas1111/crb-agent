@@ -491,12 +491,29 @@ class Toolbox:
     def _crb_status(self, _payload: dict[str, Any]) -> ToolResult:
         code, data, raw = self._crb(["doctor", "--json"])
         if code != 0:
+            # crb 的退出码是有语义的（见它的 README）：2 = 没登录，3 = 被风控拦。
+            # **这两件事必须分开报**：一个要人扫码，另一个扫码**没有用**。
+            # 混成一句「登录态不可用」会让人反复扫码，而问题在出口 IP 上。
+            if code == 3:
+                return ToolResult(
+                    status="error",
+                    summary="被学校风控拦了（403）——**这不是登录态的问题，扫码没用**",
+                    data={
+                        "exit_code": code,
+                        "kind": "waf_blocked",
+                        "hint": (
+                            "学校对办事大厅的接口按出口 IP 拦：机房/数据中心 IP 会被拒，"
+                            "但页面能打开、登录态也是好的。见 docs/deploy.md「出口 IP 约束」。"
+                        ),
+                        "output": _tail(raw),
+                    },
+                )
             return ToolResult(
                 status="error",
                 summary="登录态不可用（需要重新扫码登录）"
                 if code == 2
                 else f"crb doctor 失败（退出码 {code}）",
-                data={"exit_code": code, "output": _tail(raw)},
+                data={"exit_code": code, "kind": "not_logged_in", "output": _tail(raw)},
             )
         return ToolResult(
             status="ok",
