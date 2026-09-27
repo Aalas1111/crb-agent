@@ -130,6 +130,46 @@ def test_deploy_sh_creates_the_uv_cache_dir():
     assert ".uv-cache" in UNIT
 
 
+def _code_lines(text: str) -> str:
+    """去掉注释与空行，只留会被执行的部分。
+
+    守卫测试要盯的是**行为**，不是解释。注释里常常要写出被否决的做法
+    （「不要改走 git push ssh://…」），那不是违规。
+    """
+    return "\n".join(
+        line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+def test_sync_server_has_an_offline_transfer_fallback():
+    """传输 commit 不能**只**依赖生产机出网。
+
+    实测：这台生产机到 GitHub 的 **HTTPS 被阻断**（`git fetch` 真实退出码
+    124 = 超时），而 SSH 是通的。所以「让生产机自己 fetch」会时不时不成立；
+    必须有 bundle + scp 这条不依赖它出网、也不依赖它在检出里写权限的路。
+    """
+    code = _code_lines(SYNC_SH)
+    assert "git bundle create" in code
+    assert "scp" in code
+    # 这条路在当前权限模型下不成立：检出归 yuque，ssh 进来的是 lihe。
+    assert "git push ssh://" not in code
+
+
+def test_deploy_sh_chowns_the_state_dir_to_the_service_user():
+    """以 root 建的 state 目录不 chown，服务就写不进去。
+
+    实测：服务每 15s 重启一次，日志是
+    `PermissionError: [Errno 13] Permission denied: /var/lib/crb-agent/workspace`。
+    """
+    assert "chown yuque:yuque" in DEPLOY_SH
+
+
+def test_deploy_sh_survives_a_nonzero_is_active():
+    """`systemctl is-active` 在服务没起来时返回非 0，而它在 `$(…)` 里赋值 ——
+    裸着写会被 `set -e` 直接杀掉脚本，验收结果一行都打不出来（实测：退出码 3）。"""
+    assert 'systemctl is-active "$UNIT" || true' in DEPLOY_SH
+
+
 def test_sync_server_refuses_to_run_on_the_production_checkout():
     assert "/opt/crb-agent" in SYNC_SH
     assert "生产机的检出" in SYNC_SH

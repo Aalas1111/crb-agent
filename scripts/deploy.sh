@@ -37,9 +37,14 @@ die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 
 say "取部署锁（$LOCK）"
 mkdir -p "$STATE"
+# $STATE 必须归 yuque：这个脚本以 root 跑，不 chown 的话目录是 root:root 755，
+# 而服务以 yuque 起、要在里面建 workspace/ —— 一启动就
+# `PermissionError: [Errno 13] Permission denied: /var/lib/crb-agent/workspace`
+# （首次部署实测踩到，服务每隔 15s 重启一次）。
+chown yuque:yuque "$STATE"
 # uv 的缓存目录：单元里用 UV_CACHE_DIR 指到这里（别去写 yuque 用户的 ~/.cache）。
 mkdir -p "$STATE/.uv-cache"
-chown yuque:yuque "$STATE/.uv-cache" 2>/dev/null || true
+chown yuque:yuque "$STATE/.uv-cache"
 exec 9>"$LOCK"
 flock -n 9 || die "另一个部署正在进行（$LOCK 被占用）。等它结束再来，别抢同一个工作区。"
 
@@ -89,7 +94,7 @@ sleep 6
 say "验收"
 RC=0
 
-state="$(systemctl is-active "$UNIT")"
+state="$(systemctl is-active "$UNIT" || true)"
 printf '%-24s %s\n' "$UNIT" "$state"
 [ "$state" = "active" ] || RC=1
 

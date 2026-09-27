@@ -81,11 +81,10 @@ say "预检 3/3：生产机现在在哪个 commit"
 REMOTE_HEAD="$(ssh "$SERVER" "sudo git -C $REPO rev-parse HEAD")" || die "ssh 取不到生产机的 HEAD"
 printf '生产机 HEAD = %s\n' "${REMOTE_HEAD:0:7}"
 
-NEED_PUSH=no
 if [ "$REMOTE_HEAD" = "$LOCAL_SHA" ]; then
-  echo "已经在目标 commit 上了，不需要同步"
+  echo "已经在目标 commit 上了，不需要传输"
 else
-  say "先请生产机自己 fetch（干净路线）"
+  say "先请生产机自己 fetch（干净路线，但它到 GitHub 时通时断）"
   if ssh "$SERVER" "sudo timeout 45 git -C $REPO fetch origin" >/dev/null 2>&1; then
     UPSTREAM_SHA="$(ssh "$SERVER" "sudo git -C $REPO rev-parse origin/$BRANCH" 2>/dev/null || true)"
     if [ "$UPSTREAM_SHA" = "$LOCAL_SHA" ]; then
@@ -93,24 +92,29 @@ else
     elif [ -n "$UPSTREAM_SHA" ]; then
       die "生产机取到的 origin/$BRANCH = ${UPSTREAM_SHA:0:7}，不是本地这个 commit。
      说明上游有别的提交，或者你推的不是这个分支。先对齐再来。"
-    else
-      NEED_PUSH=yes
     fi
   else
-    echo "⚠ 生产机取不到 GitHub —— 改走「从本机 push 到生产检出」"
-    NEED_PUSH=yes
-  fi
-fi
-
-if [ "$NEED_PUSH" = "yes" ]; then
-  say "从本机 push $BRANCH → 生产检出"
-  if [ "$DRY_RUN" = "yes" ]; then
-    echo "[dry-run] git push ssh://$SERVER$REPO $BRANCH"
-  else
-    git push "ssh://$SERVER$REPO" "$BRANCH"
-    AFTER="$(ssh "$SERVER" "sudo git -C $REPO rev-parse HEAD")"
-    [ "$AFTER" = "$LOCAL_SHA" ] || die "push 之后生产机 HEAD = ${AFTER:0:7}，不是 ${LOCAL_SHA:0:7}"
-    printf '生产机 HEAD 已是 %s ✓\n' "${LOCAL_SHA:0:7}"
+    # 生产机取不到 GitHub 是常态。**不要**改走 `git push ssh://$SERVER$REPO`：
+    # 那条路在当前权限模型下不成立 —— 检出归 yuque，而 ssh 进来的是 lihe，
+    # 对仓库没有写权限，git-receive-pack 也挂不上 sudo。
+    # 用 bundle 离线送过去：不依赖生产机出网，也不依赖它在仓库里的写权限。
+    say "生产机取不到 GitHub —— 用 bundle 离线送过去"
+    if [ "$DRY_RUN" = "yes" ]; then
+      echo "[dry-run] git bundle create <tmp> $BRANCH && scp → 生产机 && fetch/merge"
+    else
+      BUNDLE="$(mktemp -t crba-sync-XXXXXX.bundle)"
+      trap 'rm -f "$BUNDLE"' EXIT
+      git bundle create -q "$BUNDLE" "$BRANCH"
+      scp -q "$BUNDLE" "$SERVER:/tmp/crba-sync.bundle"
+      ssh "$SERVER" "sudo -u yuque git -C $REPO fetch /tmp/crba-sync.bundle $BRANCH >/dev/null &&
+                     sudo git -C $REPO merge --ff-only FETCH_HEAD" ||
+        die "bundle 送过去之后合并失败（多半不是快进：生产机上有本地提交？）"
+      ssh "$SERVER" "rm -f /tmp/crba-sync.bundle" || true
+      AFTER="$(ssh "$SERVER" "sudo git -C $REPO rev-parse HEAD")"
+      [ "$AFTER" = "$LOCAL_SHA" ] || die "送完之后生产机 HEAD = ${AFTER:0:7}，不是 ${LOCAL_SHA:0:7}"
+      printf '生产机 HEAD 已是 %s ✓
+' "${LOCAL_SHA:0:7}"
+    fi
   fi
 fi
 
