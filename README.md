@@ -1,5 +1,47 @@
 # crb-agent — 教室借用的下游 agent
 
+> ## ⚠️ 已归档（2026-09-27），不再维护
+>
+> **服务器上的部署已经拆掉**：两个 systemd 单元已停用删除，`/opt/crb-agent`、
+> `/var/lib/crb-agent`、`/home/yuque/.crb-agent` 与那把只读部署密钥都清了。
+> 同一台机器上的 `yuque-agent` / `yuque-agent-plan` / `qq-bridge` **没被动到**
+> （验收时三个单元都还是 active）。
+>
+> ### 为什么停
+>
+> 这个项目的价值建立在「服务器替人调学校系统」上，而实测下来那条路走不通：
+> **学校对办事大厅接口的判定不只看出口 IP** —— 用 SSH 隧道把服务器的出口
+> 换成校园网（确认是同一个 IP）之后仍然 403；而**同一份登录态、同一个出口 IP、
+> 同一组 header**，从本机发出 200、从服务器发出 403。换 TLS 版本、换浏览器
+> TLS 指纹、换 HTTP 客户端、换 cookie 都不行（七项都试过，清单在
+> [`docs/deploy.md`](docs/deploy.md) §0）。
+>
+> 于是它退化成「只能用你自己的电脑跑」—— 那还不如直接在本机用 `crb`
+> 或同学那个浏览器插件。**本质上是真机实跑，服务器部署的意义不大。**
+>
+> ### 留下了什么
+>
+> 代码与实测结论都留着（这个仓库只读封存）：
+>
+> * agent loop 与事件契约（`agent.py` / `events.py` / `web/static/feed.js`）——
+>   思考过程 / 工具调用卡 / 最终回复按时间顺序流式呈现，这套是能复用的；
+> * 服务端扫码登录（`njuqr.py`）—— 不碰密码，二维码由服务器自己取下；
+> * 审批结果轮询（`notify.py`）与它踩过的坑（稳定 id、先判否定词、认不出不猜）；
+> * **`docs/deploy.md` §0 那份「试过但不成立」的清单** —— 免得下一个人把
+>   那些实验再做一遍；
+> * `docs/compat-browser-plugin.md`：与同学那个浏览器插件的能力对照与共存分析。
+>
+> 想重新启用：`docs/deploy.md` 有完整的部署步骤与「本机执行器」方案
+> （`scripts/local_crb_executor.py` + `remote_crb.py` + `start_local_egress.sh`）。
+>
+> ### 上游的联动改动已回退
+>
+> `yuque-agent` 那边为《审批结果》加的四处改动（`approvaldoc.py`、
+> `APPROVAL_TITLE`、根目录顺序、`refresh-approval`）**已 revert** ——
+> 数据源随本项目一起消失了，留着会让归档会话去找一篇永远不存在的文档。
+>
+> ---
+
 > **上游**：[`yuque-agent`](https://github.com/Aalas1111/nju-yuque-agent) 把社员在语雀写的申请
 > 判定、结构化成 `plan.json`；这个项目**把它变成学校系统里的借用申请**，
 > 并让你在一个网页上和它对话。
