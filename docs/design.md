@@ -129,7 +129,41 @@ POST /authserver/login?display=qrLogin&service=…      换 CASTGC，302 到 eha
 全程不接触用户密码。代价是依赖学校这套 QR 端点，所以
 `tests/test_njuqr.py` 用**真实登录页的片段**当夹具（`tests/fixtures/`）来盯解析器。
 
-## 6. 访问控制
+## 6. 审批结果轮询（`notify.py` + 单独的单元）
+
+学校系统里「审核结束了没有」这件事，只有持有学校登录态的一侧看得到 —— 所以它在这一侧。
+数据流：
+
+```
+crb borrow list --json         学校只看得到这个（轮询**只读**，只调这一个接口）
+  │ classify()：SHBZ / SHZT_DISPLAY 关键词 → 通过 / 退回 / 还在流程 / 认不出
+  ▼
+approval/ledger.jsonl          只追加；每条带**原始记录快照**（字段名会变，快照是唯一能复盘的）
+  │ build_notifications()
+  ▼
+approval/notifications.json    对外文档，每轮从账本**重生**（nova.classroom-borrow-notification.v1）
+approval/unmatched.json        认不出的，等人看；**不进**对外文档
+  │ yqa refresh-approval
+  ▼
+知识库《审批结果》            由上游渲染（写知识库归它：结构约定与 token 都在那边）
+```
+
+几个不显然的点：
+
+| 做法 | 不这么做会怎样 |
+|---|---|
+| 账本只追加、文档重生 | 纯追加的单文件修不了早期条目；而重生 + **稳定 id** 让重跑/重启都安全 |
+| `notificationId` **不含时间戳** | 含了就每轮都变，下游按 id 去重立刻失效 |
+| 先判否定词再判「进行中」 | 「学生工作处审核不通过」同时含「审核」与「不通过」，顺序反了会把退回当成还在流程里 |
+| 认不出就进 `unmatched` | 猜错会把 A 活动的结果安到 B 头上，比认不出严重得多 |
+| 「已通过但没有教室」不发 | 那是一条没有教室的「已通过」，等于误导 |
+| 字段名只在 `FIELD_MAP` 一处 | 学校字段会变；散在代码里就改不动 |
+
+轮询是**独立单元**（`crb-agent-notify.service`），它是账本唯一的写者 ——
+两个写者会互相覆盖产物（上游那次事故的教训）。`notify-poll` 与 `notify-once`
+共用一把 flock，所以「手动跑一次」不会和常驻的抢。
+
+## 7. 访问控制
 
 见 [`deploy.md`](deploy.md) §10（暴露面、密钥怎么带、已知残余风险）。
 要点：`?key=` 只用于进门，进门即换成 `HMAC(CRBA_KEY, …)` 的 HttpOnly Cookie

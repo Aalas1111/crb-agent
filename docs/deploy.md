@@ -33,6 +33,11 @@
 
 混成一句「登录态不可用」会让人对着解决不了的问题反复扫码 —— 实测踩过。
 
+**它挡住的不止一件事**：提交 / 查询 / **审批结果轮询**都调学校接口，全受影响。
+`crb-agent-notify.service` 的日志会一直显示
+`跳过这一轮：取申请列表失败（退出码 3）（学校按出口 IP 拦）` —— 那是**预期的降级**，
+不是故障（它不崩、不刷屏，等出口干净了自然就开始工作）。
+
 **出路**（挑一条）：
 
 1. **给服务配一个非机房的出口**。`httpx` 默认读 `HTTPS_PROXY`，所以在单元里加一行即可：
@@ -54,13 +59,17 @@
 | `/opt/crb-agent` | 代码检出（`origin` = 上游）。**只允许快进** |
 | `/var/lib/crb-agent/workspace` | 会话留痕（`sessions/<id>.jsonl`）+ `ops.log` |
 | `/var/lib/crb-agent/.uv-cache` | uv 缓存 |
-| `/etc/systemd/system/crb-agent.service` | 生效的单元（权威副本在 `deploy/`） |
+| `/etc/systemd/system/crb-agent.service` | 生效的单元（权威副本在 `deploy/`）：Web 界面 |
+| `/etc/systemd/system/crb-agent-notify.service` | 生效的单元：审批结果轮询（账本**唯一**的写者） |
+| `/var/lib/yuque-agent/workspace/<repo>/outbox/approval/` | 审批结果的产物（账本 / 通知文档 / unmatched） |
 | `/home/yuque/.crb/auth.json` | 学校登录态 ← **和 `crb` 用的是同一个文件** |
 | `/home/yuque/.yuque/agent.env` | `DEEPSEEK_API_KEY`、`YQA_REPO`（复用 `yuque-agent` 那份） |
 | `/home/yuque/.crb-agent/env` | 本项目自己的：只有 `CRBA_KEY` |
 | `/var/lib/yuque-agent/workspace/` | 语雀侧的产出（只读）。`plan.json` 从这里取 |
 
-**只有一个单元**：`crb-agent.service`。它是网页界面 + agent 循环的那个进程。
+**两个单元**：`crb-agent.service`（网页界面 + agent 循环）与 `crb-agent-notify.service`
+（审批结果轮询）。后者单独一个进程是刻意的 —— Web 重启不该打断跟踪审批，
+而且「谁是账本唯一的写者」要一眼可见。
 
 ## 2. 依赖
 

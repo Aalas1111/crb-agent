@@ -66,9 +66,14 @@ uv run crba serve        # 然后按 docs/deploy.md §7 的清单走
 
 ### 3.2 常驻进程必须是仓库里的 systemd 单元
 
-* 只有**一个**单元：`crb-agent.service`（权威副本在 `deploy/`，生效位置在
-  `/etc/systemd/system/`）。改单元 = 改 `deploy/*.service` → `install` 到 `/etc`
-  → `daemon-reload` → 同步 `docs/deploy.md` 里那份。
+* 只有**两个**单元（权威副本在 `deploy/`，生效位置在 `/etc/systemd/system/`）：
+  `crb-agent.service`（Web 界面）与 `crb-agent-notify.service`（审批结果轮询）。
+  改单元 = 改 `deploy/*.service` → `install` 到 `/etc` → `daemon-reload`
+  → 同步 `docs/deploy.md` 里那份。
+* **审批结果的账本只有一个写者**：`crb-agent-notify.service`。别在 Web 侧加
+  「点一下刷新账本」那种功能 —— 那会引入第二个写者。要手动跑就 `crba notify-once`
+  （与常驻共用一把 flock）。
+* **轮询只读学校系统**（只调 `borrow list`）。别顺手加「自动重试提交」。
 * **不许** `nohup` / `setsid` / `&` 起常驻进程。实测踩过（上游）：有人手工起了
   一个轮询，和 systemd 里那个抢同一个工作区，两边互相覆盖状态。
 * **端口**：这个服务用 **8788**。**8787 是 `yuque-agent-plan.service` 的下载口**
