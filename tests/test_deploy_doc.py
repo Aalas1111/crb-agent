@@ -311,3 +311,20 @@ def test_deploy_sh_never_pipes_journalctl_into_grep_q():
     # 正向：那一行「有/没有」的判定必须靠接住的输出
     assert "WEB_START=" in DEPLOY_SH
     assert "NOTIFY_START=" in DEPLOY_SH
+
+
+def test_deploy_sh_restarts_itself_when_it_was_updated():
+    """改了 deploy.sh 的那次部署，必须用**新版**跑完剩下的半段。
+
+    bash 边读边执行：fetch+merge 把自己更新了，但已经读进内存的部分不会变 ——
+    于是修好的逻辑这次不生效，看起来像「修了没用」（实测踩到两次）。
+    所以快进后比哈希，变了就放锁 `exec` 自己。
+    """
+    code = _code_lines(DEPLOY_SH)
+    assert "SELF_BEFORE=" in code and "SELF_AFTER=" in code
+    assert 'exec "$0" "$@"' in code
+    # exec 之前必须先放锁，否则重跑的那个取不到 flock
+    assert "exec 9>&-" in code
+    before = code.index("SELF_BEFORE=")
+    branch = code.index('exec "$0" "$@"')
+    assert before < branch

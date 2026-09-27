@@ -73,6 +73,11 @@ if [ -n "$UNTRACKED" ]; then
 fi
 
 say "快进到上游"
+# 自己也可能在这次快进里被更新。bash 是**边读边执行**的，已经读进内存的那部分
+# 不会跟着变 —— 于是「改了 deploy.sh」的那次部署会用**旧脚本**跑完剩下半段
+# （实测踩到两次：明明修了验收逻辑，这次部署仍然按旧逻辑报错）。
+# 所以快进完比一下自己的哈希，变了就放锁重跑一遍。
+SELF_BEFORE="$(md5sum "$0" | cut -d' ' -f1)"
 if timeout 45 "${GIT[@]}" fetch origin; then
   "${GIT[@]}" merge --ff-only origin/main
 else
@@ -80,6 +85,14 @@ else
   # 部署，但要让人看见这件事，别假装同步过了。
   echo "⚠ 取不到 origin（网络问题？）—— 跳过快进，按当前 HEAD 继续"
 fi
+SELF_AFTER="$(md5sum "$0" | cut -d' ' -f1)"
+if [ "$SELF_BEFORE" != "$SELF_AFTER" ]; then
+  say "deploy.sh 自己刚被更新 —— 用新版重跑一遍（否则后半段还是旧逻辑）"
+  # 先放锁：重跑的那个进程要自己取锁，而 exec 不关 fd 的话锁还在我们手上。
+  exec 9>&-
+  exec "$0" "$@"
+fi
+
 COMMIT="$("${GIT[@]}" rev-parse --short HEAD)"
 SUBJECT="$("${GIT[@]}" log -1 --pretty=%s)"
 
