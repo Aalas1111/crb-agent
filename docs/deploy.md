@@ -40,17 +40,44 @@
 
 **出路**（挑一条）：
 
-1. **给服务配一个非机房的出口**。`httpx` 默认读 `HTTPS_PROXY`，所以在单元里加一行即可：
-   ```
-   Environment=HTTPS_PROXY=http://<你的家宽/校园网代理>
-   ```
-   注意这个代理要能到 `ehallapp.nju.edu.cn` 与 `authserver.nju.edu.cn`。
-2. **把服务挪到干净的网络上**（家宽 / 校园网里的机器）。
-3. **用同学的浏览器插件**：它跑在用户自己的浏览器里，出口就是用户的网络，
-   天然不受这条限制（见 [`compat-browser-plugin.md`](compat-browser-plugin.md)）。
+### 1. 配一个非机房的出口（推荐，改一行配置，不动代码）
 
-> 代理配置好之后，`docs/design.md` §5 的扫码流程也会跟着走同一个出口 ——
-> 两边出口一致很重要，否则登录态与接口调用来自两个 IP，风控更容易起疑。
+**实测确认（2026-09-27）**：`crb` 与扫码流程的 httpx **都遵守 `HTTPS_PROXY`**，
+不需要改任何代码：
+
+```
+把假代理挂在 127.0.0.1:33117 上再跑 ——
+crb doctor  → ProxyError: 502 Bad Gateway       ← 走了代理
+njuqr 扫码  → 打不开登录页：502 Bad Gateway      ← 走了代理
+```
+
+**怎么填**：`/home/yuque/.crb-agent/env` 里加一行就行（**不用改单元** ——
+那个文件已经是两个单元的 `EnvironmentFile`）：
+
+```bash
+echo 'HTTPS_PROXY=http://<代理地址>:<端口>' | sudo tee -a /home/yuque/.crb-agent/env
+sudo systemctl restart crb-agent crb-agent-notify
+```
+
+代理要满足两条：
+
+* 能到 `ehallapp.nju.edu.cn` **与** `authserver.nju.edu.cn`（**都要** ——
+  登录态与接口调用必须走**同一个出口**，否则风控更容易起疑）；
+* 出口是**非机房 IP**（家宽 / 校园网）。境外代理没用：出口要么是机房、要么更可疑。
+
+> 出口从哪来？**别用 EasyConnect**：它是个人 VPN 客户端，要账号密码自动登录、
+> 多数学校限制同时在线设备数、还会断线 —— 作为常驻依赖太脆，也要把校园网凭证
+> 放上服务器。**用一台常开在家宽的机器**跑个小 HTTP 代理（tinyproxy 10 行配置）最省事。
+> 那台机器没有公网 IP 也行：让它反向连服务器
+> （`ssh -N -R 18888:127.0.0.1:8888 lihe@<服务器>`，用 autossh 保活），
+> 服务器填 `http://127.0.0.1:18888`。
+
+### 2. 把服务挪到干净的网络上（家宽 / 校园网里的机器）
+
+### 3. 用同学的浏览器插件
+
+它跑在用户自己的浏览器里，出口就是用户的网络，天然不受这条限制
+（见 [`compat-browser-plugin.md`](compat-browser-plugin.md)）。
 
 ## 1. 目录布局
 
