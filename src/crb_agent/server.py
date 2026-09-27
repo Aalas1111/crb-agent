@@ -239,11 +239,10 @@ async def _page(request: Request) -> Response:
     status = await asyncio.to_thread(app.gate.status)
     if status.get("ok"):
         return HTMLResponse((WEB_DIR / "index.html").read_text(encoding="utf-8"))
-    if status.get("kind") == "not_logged_in":
-        # 没登录态 → 去扫码。
-        return RedirectResponse("/agent/auth", status_code=302)
-    # 其余（被风控拦 / 认不出的失败）**不要去扫码** —— 扫码解决不了它们，
-    # 会变成「扫了又被弹回扫码页」的死循环。给一个说清楚原因与出路的页面。
+    # 三种「用不了」**不要**都往扫码页送：扫码只在「服务器自己能直连学校」
+    # 的部署形态下有用；而现在 `crb` 是交给本机执行器跑的（见 docs/deploy.md §0.1），
+    # 登录态也只能在那台机器上维护。统统交给 blocked 页按 kind 说清出路。
+    # （`/agent/auth` 这个路由保留：换成能直连的部署时它仍然可用。）
     return HTMLResponse((WEB_DIR / "blocked.html").read_text(encoding="utf-8"))
 
 

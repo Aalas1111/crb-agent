@@ -196,15 +196,19 @@ def test_deploy_sh_refuses_to_run_on_a_dirty_tree_before_anything_else():
     assert 0 < dirty_pos < unit_pos
 
 
-def test_deploy_doc_documents_the_egress_ip_constraint():
-    """学校按**出口 IP** 拦接口调用 —— 这是这个服务能不能用的前提。
+def test_deploy_doc_documents_the_egress_constraint():
+    """「服务器调不动学校」这件事决定怎么部署，必须写在最显眼的地方。
 
-    实测：同一份登录态、同一个 crb，开发机（家宽）调通、服务器（阿里云）403。
-    `tools._crb_status` 在 WAF 时会把用户指到这一节，所以它必须真的存在。
+    而且要把**试过但不成立**的方向也留下（换出口、换 TLS 版本、换指纹…）——
+    否则下一个人会把这些实验再做一遍。
     """
-    assert "出口 IP 约束" in DEPLOY_DOC
+    assert "学校拦的不只是出口 IP" in DEPLOY_DOC
+    assert "local_crb_executor.py" in DEPLOY_DOC
+    assert "remote_crb.py" in DEPLOY_DOC
+    # 三种「用不了」的出路都在文档里（界面按 kind 分别说）
+    assert "not_logged_in" in DEPLOY_DOC
     assert "waf_blocked" in DEPLOY_DOC
-    assert "HTTPS_PROXY" in DEPLOY_DOC
+    assert "executor_offline" in DEPLOY_DOC
 
 
 def test_deploy_doc_acceptance_checks_the_api_not_just_the_port():

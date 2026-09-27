@@ -38,8 +38,9 @@ async function loadStatus() {
       waf_blocked: "被学校拦了（点这里看出路）",
     };
     text.textContent = labels[status.kind] || "用不了（点这里看原因）";
+    // 都回 /agent（blocked 页按 kind 说清出路）；扫码页只在能直连的部署下有用。
     text.parentElement.onclick = () => {
-      location.href = status.kind === "not_logged_in" ? "/agent/auth" : "/agent";
+      location.href = "/agent";
     };
   } catch (error) {
     dot.className = "dot bad";

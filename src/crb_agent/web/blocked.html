@@ -47,8 +47,13 @@ const KINDS = {
   },
   not_logged_in: {
     title: "需要登录",
-    lead: "登录态不可用，去扫码就能恢复。",
-    advice: [],
+    lead: "学校那边的登录态失效了。",
+    advice: [
+      "<strong>在你自己的电脑上</strong>跑一次 <code>crb login</code> " +
+        "（会打开浏览器，扫码即可）—— 调学校的命令都在那台机器上执行。",
+      "如果你把服务部署在能直连学校的机器上，也可以直接 " +
+        '<a href="/agent/auth">打开扫码页</a>。',
+    ],
   },
   unknown: {
     title: "暂时用不了",

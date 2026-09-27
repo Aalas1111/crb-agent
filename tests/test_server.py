@@ -132,15 +132,17 @@ def test_valid_auth_leads_to_the_app(client):
     assert "把语雀上的申请，落成学校里的借用" in page.text
 
 
-def test_invalid_auth_redirects_to_the_qr_page(settings, monkeypatch, tmp_path):
+def test_the_qr_page_still_exists_for_direct_deployments(settings, monkeypatch):
+    """扫码页**保留**（不再主动跳它）。
+
+    当前形态（`crb` 交给本机执行器）下它没用 —— auth 只能在那台机器上维护。
+    但如果把服务部署在能直连学校的机器上，它仍然是恢复登录态的正路，
+    所以路由留着，只是不再把人往那儿送（见 test_not_logged_in_…）。
+    """
     monkeypatch.setenv("FAKE_CRB_MODE", "noauth")
     app = build_app(settings)
     with TestClient(app) as client:
         client.get(f"/agent?key={KEY}")
-        response = client.get("/agent", follow_redirects=False)
-        assert response.status_code == 302
-        assert response.headers["location"] == "/agent/auth"
-
         page = client.get("/agent/auth")
         assert page.status_code == 200
         assert "扫码" in page.text
@@ -213,14 +215,21 @@ def test_executor_offline_is_its_own_state(settings, monkeypatch):
         assert "关机" in payload["detail"]
 
 
-def test_not_logged_in_still_goes_to_the_qr_page(settings, monkeypatch):
+def test_not_logged_in_points_at_the_machine_that_can_reach_school(settings, monkeypatch):
+    """登录态只能在能调学校的那台机器上维护（现在是本机执行器）。
+
+    所以**不要**把人送到服务器上的扫码页 —— 扫了也没用（auth 落到服务器，
+    而调学校的命令在本机跑）。这一点和「被拦」「执行器没连上」一样，
+    都是「出路不在这个页面上」。
+    """
     monkeypatch.setenv("FAKE_CRB_MODE", "noauth")
     app = build_app(settings)
     with TestClient(app) as client:
         client.get(f"/agent?key={KEY}")
         response = client.get("/agent", follow_redirects=False)
-        assert response.status_code == 302
-        assert response.headers["location"] == "/agent/auth"
+        assert response.status_code == 200, "不该重定向到扫码页"
+        assert "not_logged_in" in response.text
+        assert "crb login" in response.text
 
 
 def test_qr_page_is_reachable_with_key(settings, monkeypatch):
