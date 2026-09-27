@@ -1,0 +1,218 @@
+# 部署：这台机器上的真相
+
+> 服务器地址与账号**不进仓库**（由项目负责人单独交接）。
+> 本文只写「什么在哪里、怎么验、出事了怎么找」。
+> 动手前先读 [`principles.md`](principles.md) 与仓库根的 [`AGENTS.md`](../AGENTS.md)。
+
+## 1. 目录布局
+
+| 路径 | 是什么 |
+|---|---|
+| `/opt/crb-agent` | 代码检出（`origin` = 上游）。**只允许快进** |
+| `/var/lib/crb-agent/workspace` | 会话留痕（`sessions/<id>.jsonl`）+ `ops.log` |
+| `/var/lib/crb-agent/.uv-cache` | uv 缓存 |
+| `/etc/systemd/system/crb-agent.service` | 生效的单元（权威副本在 `deploy/`） |
+| `/home/yuque/.crb/auth.json` | 学校登录态 ← **和 `crb` 用的是同一个文件** |
+| `/home/yuque/.yuque/agent.env` | `DEEPSEEK_API_KEY` 等（复用 `yuque-agent` 那份） |
+| `/home/yuque/.crb-agent/env` | 本项目自己的：`CRBA_KEY`、`YQA_REPO` |
+| `/var/lib/yuque-agent/workspace/` | 语雀侧的产出（只读）。`plan.json` 从这里取 |
+
+**只有一个单元**：`crb-agent.service`。它是网页界面 + agent 循环的那个进程。
+
+## 2. 依赖
+
+三样东西，都不由本项目托管：
+
+```bash
+# 1) crb —— 教室借用 CLI（和语雀侧的 yuque-agent 各自独立）
+uv tool install "git+https://github.com/Aalas1111/NJU_Classroom_Booking"
+
+# 2) yqa —— 语雀侧的 agent（用来刷新 plan.json）
+uv tool install "git+https://github.com/Aalas1111/nju-yuque-agent"
+
+# 3) 本项目
+cd /opt/crb-agent && uv sync
+```
+
+两个 CLI 都落在 `/home/yuque/.local/bin`，单元里显式加了这条 PATH
+（systemd 的默认 PATH 里没有它）。
+
+## 3. 凭证
+
+| 变量 | 放哪 | 怎么来 |
+|---|---|---|
+| `CRBA_KEY` | `/home/yuque/.crb-agent/env` | **你自己定**一个长随机串。这是这个服务唯一的防线 |
+| `YQA_REPO` | `/home/yuque/.crb-agent/env` | 语雀知识库，`<group>/<repo>` 两段。**必须和 `yuque-agent` 配的一致** |
+| `DEEPSEEK_API_KEY` | `/home/yuque/.yuque/agent.env` | 已存在，**复用**，不新开一份 |
+| 学校登录态 | `/home/yuque/.crb/auth.json` | 网页上扫码（见 §6），或 `crba auth` |
+
+建本项目的那个文件：
+
+```bash
+sudo install -d -o yuque -g yuque -m 750 /home/yuque/.crb-agent
+sudo tee /home/yuque/.crb-agent/env >/dev/null <<'EOF'
+CRBA_KEY=<换成一个长随机串>
+YQA_REPO=<group>/<repo>
+EOF
+sudo chown yuque:yuque /home/yuque/.crb-agent/env
+sudo chmod 600 /home/yuque/.crb-agent/env
+```
+
+> `CRBA_KEY` 是**必需的**，没配服务会拒绝启动并打印一句人话。
+> 这是刻意的 fail-closed：界面上能提交借用申请、能花 LLM 的 token，
+> 不该有「没配就裸奔」的中间状态。
+>
+> `YQA_REPO` 决定 `plan.json` 在哪（`<yuque_workspace>/<repo>/outbox/plan.json`）。
+> 不加 `CRBA_OUTBOX` 就是因为这一个变量同时喂给 `outbox()` 和 `yqa export-plan`，
+> 少一处会对不上的配置。
+
+## 4. 首次部署
+
+```bash
+# ① 在开发机上，先把代码送到生产机（服务器取不到 GitHub 时也走得通）
+scp -r . <user>@<地址>:/tmp/crb-agent-src
+ssh <user>@<地址> 'sudo mv /tmp/crb-agent-src /opt/crb-agent && sudo chown -R yuque:yuque /opt/crb-agent'
+
+# ② 生产机上准备依赖与凭证（见 §2 §3），然后
+ssh <user>@<地址> 'sudo /opt/crb-agent/scripts/deploy.sh'
+```
+
+`deploy.sh` 会：取 flock → 确认工作区干净 → 快进 → **在临时 HOME 里跑测试** →
+对齐单元 → 重启 → 验收（含「不带密钥必须被拦」）→ 记 `ops.log`。
+
+## 5. 日常更新
+
+```bash
+# 开发机侧：把当前 commit 送过去并部署（推荐）
+scripts/sync-server.sh --server <user>@<地址>
+
+# 或者：生产机自己能取到 GitHub 时，直接在机器上
+sudo /opt/crb-agent/scripts/deploy.sh
+```
+
+① **这台机器到 GitHub 时通时断**（和 `yuque-agent` 遇到的是同一个网络）。
+`deploy.sh` 取不到 origin 时会「按当前 HEAD 继续」——那等于悄悄部署旧 commit，
+所以要看着日志里的那行 `⚠ 取不到 origin`。`sync-server.sh` 就是为这条路准备的：
+先把 commit 送到生产检出，再调 `deploy.sh`。
+
+### 测试**不要**在生产机上裸跑
+
+```bash
+# ❌ 不要这样
+cd /opt/crb-agent && uv run pytest
+
+# ✅ 要跑就走 deploy.sh（它把 HOME 关进临时目录）
+sudo /opt/crb-agent/scripts/deploy.sh
+```
+
+理由与 `yuque-agent` 那次事故同源（见其 `AGENTS.md` §2.1）：测试一旦碰到
+默认路径下的真凭证，代价是重扫一次码。我们的测试全部不联网、`crb`/`yqa`
+都用替身（`tests/fake_cli.py`），但**闸门不是许可证**——照旧走沙箱。
+
+## 6. 学校登录态（auth）怎么恢复
+
+登录态失效时，打开界面会被自动送到扫码页：
+
+```
+http://<地址>:8788/agent?key=<CRBA_KEY>
+        ↓ 登录态失效
+http://<地址>:8788/agent/auth     ← 页面上就是二维码
+```
+
+用**南京大学 APP** 或微信扫一下、手机上点确认，页面自动跳回界面。
+全程不需要浏览器、不需要密码，二维码是服务器自己取下来的（原理见
+[`njuqr.py`](../src/crb_agent/njuqr.py) 的文件头）。
+
+拿不到网页时，还有命令行版本：
+
+```bash
+sudo -u yuque HOME=/home/yuque /usr/local/bin/uv run --no-sync crba auth
+```
+
+它会打印二维码图片的地址，**任何一台能上网的设备**打开那个地址都能扫
+（图片本身是 authserver 的公开 GET，而真正完成登录的是你手机上的确认）。
+
+> 登录态能撑多久由学校策略决定，我们不做假设。失效就再扫一次。
+
+## 7. 验收清单
+
+```bash
+systemctl is-active crb-agent.service            # active
+journalctl -u crb-agent -n 20 --no-pager | grep "crba 已启动"
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/healthz        # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/agent          # 403（不带密钥）
+```
+
+再打开 `http://<地址>:8788/agent?key=…`：
+
+1. 界面出现，左下角显示「学期 · 模型」而不是红点；
+2. 发一句话，能看到**思考过程 → 工具卡 → 回复**按顺序流出来；
+3. 左侧栏有历史会话，点进去内容完整（含思考块与工具卡）。
+
+`ops.log` 里应多一行 `deploy`。
+
+## 8. 出事了怎么办
+
+1. **先留证据再动手**：`journalctl -u crb-agent -n 100`、`ops.log`、`git log`、
+   `stat -c '%y %n' <文件>`（文件被谁何时改的，mtime 常常是唯一线索）。
+2. **登录态失效**不是故障，按 §6 扫一次码即可 —— 别急着重启（重启不解决它）。
+3. **端口冲突**：8787 是 `yuque-agent-plan` 的下载口。本服务用 8788，
+   两者互不相干；`ss -ltnp | grep 878` 一眼能看出谁占了谁。
+4. 结论写进提交信息或 `docs/`，**不要只留在聊天里**——下一个代理看不到聊天。
+
+## 9. 回退
+
+```bash
+cd /opt/crb-agent
+sudo git log --oneline -5                 # 找到上一个好 commit
+sudo git checkout <commit>                # 只读地退回去（生产机禁止 rebase）
+sudo systemctl restart crb-agent
+```
+
+注意 `deploy.sh` 只允许快进，所以「回退」等于临时 detached HEAD；
+正式做法是发一个新的修复提交。
+
+## 10. 暴露面（为什么可以绑 `0.0.0.0`）
+
+单元里 `CRBA_HOST` 默认 `0.0.0.0`（监听所有网卡）。按 [`AGENTS.md`](../AGENTS.md) §2.2
+的规矩，绑公网必须写清楚**暴露什么、靠什么鉴权、为什么接受**：
+
+**暴露什么**
+
+| 路径 | 需要密钥吗 | 内容 |
+|---|---|---|
+| `/agent`、`/agent/auth`、`/agent/static/*` | **要** | 界面、扫码页、前端静态文件 |
+| `/agent/api/*` | **要** | 会话列表与内容、发消息（SSE）、登录态状态 |
+| `/healthz` | 不要 | 只有 `ok` 两个字母 |
+| `/` | 不要 | 302 到 `/agent` |
+
+**靠什么鉴权**：一个共享密钥（`CRBA_KEY`）。两种带法——
+
+* `?key=…`：**只用于第一次进门**。校验通过后立刻把 URL 里的 `key` 摘掉、
+  换成 HttpOnly 的 `crba_session` Cookie 再重定向，所以密钥不会留在地址栏、
+  浏览器历史、截图里；
+* Cookie 的值是 `HMAC(CRBA_KEY, "crba-session-v1")` —— 确定（重启不掉线）、
+  不可逆（拿到 Cookie 反推不出密钥）、换密钥即全体失效。
+* 比较用 `hmac.compare_digest`（常数时间）。错密钥与没密钥**都只回「密钥错误」**，
+  不透露这个页面上有什么。
+
+**为什么接受这个暴露面**：这个页面能提交教室借用申请、能花 LLM 的 token，
+所以不能像 `yuque-agent` 的下载口那样公开。但它也**不该只绑 127.0.0.1** ——
+它要给人用，而服务器没有域名、只有明文 HTTP，绑回环等于只有 SSH 隧道能用。
+于是选择是：**明文 HTTP + 一个共享密钥**，并且把「密钥不进地址栏」这条做掉。
+
+**已知的残余风险**（写出来，不装作没有）：
+
+* 明文 HTTP ⇒ 同一网络路径上的攻击者能看到 Cookie 与全部对话内容。
+  没有域名、没有证书，这一条**无解**，只能靠「这是个内部小工具」来容忍。
+  真要解决就得有域名 + HTTPS（那是另一件事）。
+* 没有速率限制：拿到密钥的人可以随便打。密钥只发给自己人。
+* **`plan.json` 里含借用人姓名与手机号**，agent 读它时会把这两样带进对话
+  （LLM 上下文）。这**不是本项目引入的**——上游刻意把 `defaults` 内联进
+  `plan.json`，并在自己的部署文档里标注了这是唯一的 PII 风险点。
+  但要知道：**与 agent 的对话内容里会出现姓名与手机号**。
+* 会话留痕（`/var/lib/crb-agent/workspace`）里存着完整对话，同样含上面那些信息。
+  它是 `600`、归 `yuque`，但**不是加密的**。
+
+**安全组**：放行 TCP `8788`，源留 `0.0.0.0/0`（否则外网进不来）。
+**不要**为了这个服务去动 8787 的规则。

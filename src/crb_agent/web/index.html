@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>教室借用 · crb-agent</title>
+<link rel="stylesheet" href="/agent/static/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="brand">教室借用 Agent <small>crb</small></div>
+      <button class="new-session" id="new-session" type="button">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        新会话
+      </button>
+    </div>
+    <nav class="session-list" id="session-list"></nav>
+    <div class="sidebar-foot">
+      <div><span class="dot" id="status-dot"></span><span id="status-text">检查登录态…</span></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="main-head">
+      <div class="title" id="head-title">教室借用</div>
+      <span class="pill">语雀清单 → 学校系统</span>
+    </header>
+
+    <div class="feed" id="feed">
+      <div class="feed-inner" id="feed-inner"></div>
+      <div class="feed-inner" id="empty-state">
+        <div class="intro">
+          <h1>把语雀上的申请，落成学校里的借用</h1>
+          <p>我能查空闲教室、读语雀侧的申请清单、批量存草稿或提交，也能回答「已提交的申请批下来没有」。</p>
+          <div class="intro-cards">
+            <button class="intro-card" type="button"
+                    data-prompt="现在语雀侧的清单里有哪些申请？和已经提交过的对照一下有没有重复的。">
+              <strong>看看本周清单</strong>
+              <span>读 plan.json，并和已提交的申请对一遍，指出重复与缺口</span>
+            </button>
+            <button class="intro-card" type="button"
+                    data-prompt="帮我查一下已经提交的教室借用申请现在都到哪一步了，有没有被退回的。">
+              <strong>查审批进度</strong>
+              <span>列出所有申请及其状态：草稿 / 等审核 / 已通过 / 已撤回</span>
+            </button>
+            <button class="intro-card" type="button"
+                    data-prompt="按语雀侧的清单出一份借用方案给我看，先不要写进系统。">
+              <strong>出借用方案</strong>
+              <span>逐条查空闲教室并分配，只出方案、不动学校系统</span>
+            </button>
+            <button class="intro-card" type="button"
+                    data-prompt="帮我在仙林校区找一间下周三下午两点以后能用的教室。">
+              <strong>找一间教室</strong>
+              <span>按校区、日期、节次查空闲教室</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer-wrap">
+      <div class="composer">
+        <div class="composer-box">
+          <textarea id="composer-input" rows="1" placeholder="跟它说要做什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="btn-send" id="btn-send" type="button" title="发送">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+          <button class="btn-stop hidden" id="btn-stop" type="button" title="停止">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+          </button>
+        </div>
+        <div class="hint">默认只存草稿；正式提交需要你明确同意。</div>
+      </div>
+    </div>
+  </main>
+</div>
+<script type="module" src="/agent/static/app.js"></script>
+</body>
+</html>

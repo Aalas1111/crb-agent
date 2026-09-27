@@ -1,0 +1,54 @@
+[Unit]
+Description=crb-agent 教室借用 agent（密钥保护的 HTTP 界面 + 流式对话）
+# 指向部署后的那份文档（路径就是仓库里的 docs/deploy.md）。刻意不写 GitHub 链接：
+# 这个仓库还没有上游，编一个地址比没有地址更糟。
+Documentation=file:/opt/crb-agent/docs/deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yuque
+Group=yuque
+WorkingDirectory=/opt/crb-agent
+
+# ① 复用 yuque-agent 的那份凭证（DEEPSEEK_API_KEY 在里面）——这是刻意的：
+#    同一个 LLM key，不新增一份要维护的凭证。
+# ② 本项目自己的（CRBA_KEY、YQA_REPO）放它自己的文件里。前面那个 `-` 是「缺了也
+#    别让 systemd 先崩」：真缺了由程序自己报一句「请设置 CRBA_KEY」更好懂。
+EnvironmentFile=/home/yuque/.yuque/agent.env
+EnvironmentFile=-/home/yuque/.crb-agent/env
+
+Environment=HOME=/home/yuque
+Environment=PYTHONUNBUFFERED=1
+Environment=UV_CACHE_DIR=/var/lib/crb-agent/.uv-cache
+# crb / yqa 是 uv tool 装的，落在 ~/.local/bin —— 别依赖 systemd 的默认 PATH。
+Environment=PATH=/home/yuque/.local/bin:/usr/local/bin:/usr/bin:/bin
+# 会话留痕（一个会话一个 jsonl）。
+Environment=CRBA_WORKSPACE=/var/lib/crb-agent/workspace
+# 语雀侧的产出目录由 YQA_REPO 推出来（= <yuque_workspace>/<repo>/outbox）。
+Environment=CRBA_YUQUE_WORKSPACE=/var/lib/yuque-agent/workspace
+# 8787 是 yqa serve-plan 的下载口（公开、无鉴权），这个服务用 8788。
+Environment=CRBA_PORT=8788
+
+ExecStart=/usr/local/bin/uv run --no-sync crba serve
+
+Restart=always
+RestartSec=15
+
+# systemctl stop 时 Python 以 143（SIGTERM）退出，那是正常停止，不是故障。
+SuccessExitStatus=143
+
+# 加固：只需要读语雀产出、写自己的 workspace、对外监听。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# 放宽一项：要读 ~/.crb/auth.json（登录态）与语雀产出目录。
+ReadWritePaths=/var/lib/crb-agent
+ReadOnlyPaths=/var/lib/yuque-agent/workspace /home/yuque/.crb /home/yuque/.yuque
+
+[Install]
+WantedBy=multi-user.target

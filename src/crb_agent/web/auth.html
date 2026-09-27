@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>扫码登录 · 教室借用</title>
+<link rel="stylesheet" href="/agent/static/style.css">
+</head>
+<body>
+<div class="center-page">
+  <div class="card">
+    <h1>先恢复学校登录态</h1>
+    <p>教室借用要用你在南大的登录态。用<strong>南京大学 APP</strong> 或微信扫下面这个码，
+       在手机上确认即可——我们不会碰到你的密码。</p>
+
+    <div class="qr-box" id="qr-box">
+      <div id="qr-placeholder" style="color:#666;font-size:13px">正在取二维码…</div>
+      <img id="qr-img" alt="登录二维码" class="hidden">
+    </div>
+
+    <div class="qr-state" id="qr-state">等待扫描…</div>
+    <button class="btn-ghost hidden" id="btn-retry" type="button">换一张二维码</button>
+
+    <ol class="steps" style="margin-top:18px">
+      <li>打开南京大学 APP → 扫一扫</li>
+      <li>在手机上点「确认登录」</li>
+      <li>这个页面会自动跳进 agent 界面</li>
+    </ol>
+  </div>
+</div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+let token = null;
+let timer = null;
+let finished = false;
+
+function setState(text, className = "") {
+  const node = $("qr-state");
+  node.textContent = text;
+  node.className = `qr-state ${className}`;
+}
+
+async function post(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  return payload;
+}
+
+async function refresh() {
+  finished = false;
+  $("btn-retry").classList.add("hidden");
+  $("qr-img").classList.add("hidden");
+  $("qr-placeholder").classList.remove("hidden");
+  $("qr-placeholder").textContent = "正在取二维码…";
+  setState("等待扫描…");
+  try {
+    const payload = await post("/agent/api/auth/qr");
+    token = payload.token;
+    $("qr-img").src = payload.png;
+    $("qr-img").classList.remove("hidden");
+    $("qr-placeholder").classList.add("hidden");
+    startPolling();
+  } catch (error) {
+    setState(String(error.message || error), "err");
+    $("qr-placeholder").textContent = "取二维码失败";
+    $("btn-retry").classList.remove("hidden");
+  }
+}
+
+function startPolling() {
+  clearInterval(timer);
+  timer = setInterval(async () => {
+    if (finished || !token) return;
+    try {
+      const payload = await fetch(`/agent/api/auth/qr/${encodeURIComponent(token)}`).then((r) => r.json());
+      if (payload.state === "scanned") {
+        setState("已扫描，请在手机上点「确认登录」", "warn");
+      } else if (payload.state === "done") {
+        finished = true;
+        clearInterval(timer);
+        setState(payload.detail || "登录成功，正在进入…", "ok");
+        setTimeout(() => {
+          location.href = "/agent";
+        }, 700);
+      } else if (payload.state === "expired") {
+        finished = true;
+        clearInterval(timer);
+        setState(payload.detail || "二维码已过期", "warn");
+        $("btn-retry").classList.remove("hidden");
+      } else if (payload.state === "error") {
+        finished = true;
+        clearInterval(timer);
+        setState(payload.detail || "登录没成功", "err");
+        $("btn-retry").classList.remove("hidden");
+      }
+    } catch {
+      /* 网络抖一下不打断轮询 */
+    }
+  }, 1500);
+}
+
+$("btn-retry").addEventListener("click", refresh);
+refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+[project]
+name = "crb-agent"
+version = "0.0.0"
+description = "教室借用的下游 agent：把语雀侧的申请清单变成草稿，并在网页上与它对话"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "NOVA Contributors" }]
+keywords = ["crb", "nju", "classroom-booking", "agent", "llm"]
+
+dependencies = [
+    "httpx[socks]>=0.27",
+    "pydantic>=2.7",
+    "rich>=13.7",
+    "starlette>=0.37",
+    "typer>=0.12",
+    "uvicorn>=0.30",
+    # tzdata —— 把时区钉死在 Asia/Shanghai（见 config.py）。
+    #   Linux 上 zoneinfo 用系统 /usr/share/zoneinfo，它用不上；
+    #   但 Windows 没有系统 IANA 库，没它就 import 就炸。加上它，两边行为一致。
+    "tzdata>=2024.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+crba = "crb_agent.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.28,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-include = ["tests/**", "docs/**", "scripts/**", "deploy/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]

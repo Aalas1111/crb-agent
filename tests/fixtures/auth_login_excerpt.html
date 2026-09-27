@@ -1,0 +1,30 @@
+<input type="hidden" id="_eventId" name="_eventId" value="submit" /><input type="hidden" id="cllt" name="cllt" value="userNameLogin"><input type="hidden" id="dllt" name="dllt" value="generalLogin"><input type="hidden" id="lt" name="lt" value="" /><input type="hidden" id="pwdEncryptSalt" value="KyCP6oGzeVuu45Qw" /><input type="hidden" id="execution" name="execution" value="e1s1" /></form>
+	</div>
+    </div>
+    <!-- 嵌入二维码登录 --><div id="qrLoginDiv" style="display: none">
+        <div>
+    <script type="text/javascript" src="/authserver/njuTheme/static/custom/js/qrcode.js?v=20260703.154014"></script>
+    <!--认证融合码--><div>
+        <div class="qr_scan_box">
+            <form method="post" id="qrLoginForm" action="/authserver/login" role="form">
+                <div id="qr_code">
+                    <div class="qr_scan_code"><img id="qr_img" src=""/></div>
+                    <span class="title lang_text_ellipsis">手机扫码  安全登录</span>
+                </div>
+                <div id="qr_success" class="qr_success" style="display: none">
+                    <div class="qr_scan_success">
+                        <img src="/authserver/njuTheme/static/custom/images/success_qr.png"/><div class="qr_success_tips_div">
+                            <span class="qr_success_tips">扫描成功</span>
+                            <span class="sub_title lang_text_ellipsis qr_success_sub_title">请在手机上「确认登录」</span>
+                        </div>
+                    </div>
+                    <div class="scan_footer lang_text_ellipsis qr_success_back"><a class="scan_a" href="javascript:refresh();">返回二维码</a></div>
+                </div>
+                <div id="qr_invalid" style="display: none">
+                    <div class="qr_scan_code">
+                        <img id="invalid_img" src=""/><div class="qr_scan_Invalid">
+                            <img id="qr_refresh" src="/authserver/njuTheme/static/custom/images/refresh.png" onclick="refresh()"/></div>
+                    </div>
+                    <span class="title lang_text_ellipsis">手机扫码  安全登录</span>
+                </div>
+                <input type="hidden" name="lt" id="lt" value="" /><input type="hidden" name="uuid" id="uuid" value=""/><input type="hidden" name="cllt" value="qrLogin"/><input type="hidden" id="dllt" name="dllt" value="generalLogin"><input type="hidden" name="execution" value="e1s1"/><input type="hidden" name="_eventId" value="submit"/><input type="hidden" name="rmShown" value="1"></form>

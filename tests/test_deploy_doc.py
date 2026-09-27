@@ -1,0 +1,141 @@
+"""守卫测试：盯住 systemd 单元、部署文档、脚本三者不漂。
+
+`AGENTS.md` §5 要求「碰了 `deploy/*.service` 就同步 `docs/deploy.md`」——
+靠人记着一定会忘，所以钉成断言。这里**不检查运行时行为**，只检查
+那些「写错了就会在半夜出问题」的事实：端口、唯一写者、凭证路径、fail-closed。
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+UNIT = (ROOT / "deploy" / "crb-agent.service").read_text(encoding="utf-8")
+DEPLOY_DOC = (ROOT / "docs" / "deploy.md").read_text(encoding="utf-8")
+DEPLOY_SH = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+SYNC_SH = (ROOT / "scripts" / "sync-server.sh").read_text(encoding="utf-8")
+
+
+def test_unit_uses_8788_and_never_steals_8787():
+    """8787 是 yuque-agent-plan 的下载口。占它会让那边的取件口失效。"""
+    assert "CRBA_PORT=8788" in UNIT
+    # 只允许在**注释里**提 8787（提醒后来人别占），不许真去设它。
+    for line in UNIT.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith("Description="):
+            continue
+        assert "8787" not in line, f"单元里真的设了 8787：{line}"
+    assert "8787" in UNIT  # 那句提醒还在（挪走了就补回来）
+
+
+def test_deploy_doc_documents_the_port_and_the_unit():
+    assert "8788" in DEPLOY_DOC
+    assert "crb-agent.service" in DEPLOY_DOC
+
+
+def test_unit_restarts_on_failure():
+    """常驻服务必须自愈——没人会半夜上去手工重启它。"""
+    assert "Restart=always" in UNIT
+    # systemctl stop 时 Python 以 143 退出，别把它当故障
+    assert "SuccessExitStatus=143" in UNIT
+
+
+def test_unit_has_both_environment_files():
+    assert "EnvironmentFile=/home/yuque/.yuque/agent.env" in UNIT  # 复用 LLM key
+    assert "EnvironmentFile=-/home/yuque/.crb-agent/env" in UNIT  # 本项目自己的
+
+
+def test_unit_pins_a_sane_path():
+    """crb / yqa 是 uv tool 装的，落在 ~/.local/bin —— 不能靠 systemd 的默认 PATH。"""
+    assert "Environment=PATH=" in UNIT
+    assert "/home/yuque/.local/bin" in UNIT
+
+
+def test_unit_keeps_the_workspace_path_in_sync_with_the_deploy_doc():
+    workspace = re.search(r"Environment=CRBA_WORKSPACE=(\S+)", UNIT)
+    assert workspace is not None
+    assert workspace.group(1) in DEPLOY_DOC
+
+
+def test_unit_does_not_hardcode_the_school_repo_slug():
+    """语雀知识库名属于部署配置，不该写死在仓库里的单元里（会跟 yqa 漂）。"""
+    assert "CRBA_OUTBOX=" not in UNIT
+    assert "ghxd00" not in UNIT
+
+
+def test_deploy_sh_takes_a_lock_and_only_fast_forwards():
+    """一次只能有一个写者；生产机禁止 rebase / 手工 merge。"""
+    assert "flock -n" in DEPLOY_SH
+    assert "--ff-only" in DEPLOY_SH
+
+
+def test_deploy_sh_runs_tests_in_a_sandbox_home():
+    """事故：测试碰到默认路径下的真凭证 = 重扫一次码。"""
+    assert 'HOME="$SANDBOX"' in DEPLOY_SH or "HOME=$SANDBOX" in DEPLOY_SH
+
+
+def test_deploy_sh_verifies_the_key_gate_actually_blocks():
+    """「进程活着」不等于「门在拦」——验收必须验 403。"""
+    assert "403" in DEPLOY_SH
+    assert "/agent" in DEPLOY_SH
+
+
+def test_deploy_sh_writes_an_ops_log():
+    assert "ops.log" in DEPLOY_SH
+
+
+def test_sync_server_refuses_to_run_on_the_production_checkout():
+    assert "/opt/crb-agent" in SYNC_SH
+    assert "生产机的检出" in SYNC_SH
+
+
+def test_sync_server_does_not_hardcode_a_host():
+    """服务器地址不进仓库。"""
+    assert "CRBA_SERVER" in SYNC_SH
+    for pattern in (r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", r"@[\w.-]+\.(com|cn|net)"):
+        assert not re.search(pattern, SYNC_SH), f"sync-server.sh 里出现了疑似地址：{pattern}"
+
+
+def test_deploy_doc_has_the_required_exposure_writeup():
+    """AGENTS.md §2.2：绑 0.0.0.0 必须写清暴露什么 / 靠什么鉴权 / 为什么接受。"""
+    for phrase in ("暴露面", "密钥", "0.0.0.0", "残余风险"):
+        assert phrase in DEPLOY_DOC
+
+
+def test_deploy_doc_admits_the_plan_pii():
+    """与 agent 的对话里会出现 plan.json 带来的姓名与手机号——别装作没有。"""
+    assert "手机号" in DEPLOY_DOC
+
+
+def test_deploy_doc_forbids_running_tests_on_the_production_box():
+    assert "不要这样" in DEPLOY_DOC
+    assert "临时目录" in DEPLOY_DOC
+
+
+#: 不是「地址」的四种字面量，所以不算违规：
+#: 前三个是绑定规则里的回环与不限（文档必须能写它们）；
+#: 最后一个是浏览器 User-Agent 里的版本号（``Chrome/136.0.0.0``），
+#: 形状和 IP 一样。往这里加东西要停顿一下——这份名单是**刻意维护**的例外。
+_NOT_AN_ADDRESS = {
+    "127.0.0.1",
+    "0.0.0.0",
+    "255.255.255.255",
+    "136.0.0.0",
+}
+
+
+def test_repo_does_not_contain_an_address_or_a_secret():
+    """仓库里不许出现服务器地址与密钥（靠人来守不如靠一句话的断言）。"""
+    checked = [p for p in ROOT.rglob("*") if p.is_file() and ".venv" not in p.parts]
+    for path in checked:
+        # 跳过本文件：它自己就写着这两个「要找的东西」，否则会自己举报自己。
+        if path == Path(__file__).resolve():
+            continue
+        if path.suffix not in {".md", ".py", ".sh", ".service", ".toml", ".js", ".html", ".css"}:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        found = re.findall(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", text)
+        bad = [ip for ip in found if ip not in _NOT_AN_ADDRESS]
+        assert not bad, f"{path} 里有 IP：{bad}"
+        assert "sk-" not in text, f"{path} 里疑似有 LLM key"

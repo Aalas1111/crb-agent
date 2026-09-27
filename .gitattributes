@@ -1,0 +1,6 @@
+# 一律 LF。这个仓库要在 Linux 上跑（systemd + bash 脚本），
+# CRLF 会让 scripts/*.sh 直接报 "bad interpreter"，
+# 而这种错在 Windows 上开发时完全看不到。
+* text=auto eol=lf
+*.png binary
+*.lock text eol=lf
