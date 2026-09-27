@@ -114,29 +114,40 @@ def _tail(text: str, limit: int = 400) -> str:
     return text[:limit] + ("…" if len(text) > limit else "")
 
 
-def _kind_for(code: int) -> str:
-    """crb 的退出码 → 我们内部的 ``kind``。
+#: crb 的退出码 → 我们内部的 ``kind``。**必须分开报**，因为处理方式完全不同：
+#: 2 要人扫码；3 是学校拦（扫码没用）；4 是「本机的 crb 执行器没连上」
+#: （要人去开电脑 / 起执行器，见 docs/deploy.md §0.1）。
+#: 混成一句「登录态不可用」会让人对着解决不了的问题反复扫码 —— 实测踩过。
+_KINDS = {0: "ok", 2: "not_logged_in", 3: "waf_blocked", 4: "executor_offline"}
 
-    ``2`` 和 ``3`` **必须分开**：一个要人扫码，另一个扫码没用（学校按出口 IP
-    拦机房 IP）。混成一句「登录态不可用」会让人对着解决不了的问题反复扫码。
-    退出码语义见 crb 的 README。
-    """
-    return {0: "ok", 2: "not_logged_in", 3: "waf_blocked"}.get(code, "unknown")
+_KIND_HINTS = {
+    "waf_blocked": (
+        "学校对办事大厅接口的判定不只看出口 IP（实测：换出口也拦）。"
+        "出路是让请求从能过的那台机器发出，见 docs/deploy.md §0.1。"
+    ),
+    "not_logged_in": "需要重新扫码登录（打开 /agent 会跳到扫码页）。",
+    "executor_offline": (
+        "本机的 crb 执行器没连上 —— 请在你自己的电脑上跑 "
+        "scripts/local_crb_executor.py 与 SSH 隧道，见 docs/deploy.md §0.1。"
+    ),
+}
+
+
+def _kind_for(code: int) -> str:
+    return _KINDS.get(code, "unknown")
 
 
 def _failure(summary: str, code: int, raw: str) -> ToolResult:
     kind = _kind_for(code)
-    hint = ""
-    if kind == "waf_blocked":
-        hint = (
-            "学校按出口 IP 拦：机房 IP 会被拒，登录态本身没问题，扫码也没用。见 docs/deploy.md §0。"
-        )
-    elif kind == "not_logged_in":
-        hint = "需要重新扫码登录（打开 /agent 会跳到扫码页）。"
     return ToolResult(
         status="error",
         summary=summary,
-        data={"exit_code": code, "kind": kind, "hint": hint, "output": _tail(raw)},
+        data={
+            "exit_code": code,
+            "kind": kind,
+            "hint": _KIND_HINTS.get(kind, ""),
+            "output": _tail(raw),
+        },
     )
 
 
@@ -564,18 +575,10 @@ class Toolbox:
             # **这两件事必须分开报**：一个要人扫码，另一个扫码**没有用**。
             # 混成一句「登录态不可用」会让人反复扫码，而问题在出口 IP 上。
             if code == 3:
-                return ToolResult(
-                    status="error",
-                    summary="被学校风控拦了（403）——**这不是登录态的问题，扫码没用**",
-                    data={
-                        "exit_code": code,
-                        "kind": "waf_blocked",
-                        "hint": (
-                            "学校对办事大厅的接口按出口 IP 拦：机房/数据中心 IP 会被拒，"
-                            "但页面能打开、登录态也是好的。见 docs/deploy.md「出口 IP 约束」。"
-                        ),
-                        "output": _tail(raw),
-                    },
+                return _failure("被学校拦了（403）——**这不是登录态的问题，扫码没用**", code, raw)
+            if code == 4:
+                return _failure(
+                    "本机的 crb 执行器没连上（那台电脑关机了，或没跑执行器）", code, raw
                 )
             return _failure(
                 "登录态不可用（需要重新扫码登录）"

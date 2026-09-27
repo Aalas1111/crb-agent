@@ -173,8 +173,9 @@ def test_waf_block_explains_instead_of_bouncing_to_the_qr_page(settings, monkeyp
         client.get(f"/agent?key={KEY}")
         response = client.get("/agent", follow_redirects=False)
         assert response.status_code == 200, "不该重定向"
-        assert "风控" in response.text
-        assert "扫码没有用" in response.text
+        # 三种「用不了」的出路不同，页面要按 kind 分别说
+        assert "executor_offline" in response.text
+        assert "本机的执行器没连上" in response.text
 
 
 def test_status_api_distinguishes_waf_from_not_logged_in(settings, monkeypatch):
@@ -193,6 +194,23 @@ def test_status_api_distinguishes_waf_from_not_logged_in(settings, monkeypatch):
         client.get(f"/agent?key={KEY}")
         payload = client.get("/agent/api/status").json()
         assert payload["kind"] == "not_logged_in"
+
+
+def test_executor_offline_is_its_own_state(settings, monkeypatch):
+    """「执行器没连上」= 你的电脑没开机/没跑执行器，与「被学校拦」「没登录」都不同。
+
+    实测：服务器本身调不动学校接口，所以命令要交给本机的执行器；那台机器关了
+    就会走到这里。提示必须指向「去开电脑」，而不是「去扫码」或「换个出口」。
+    """
+    monkeypatch.setenv("FAKE_CRB_MODE", "offline")
+    app = build_app(settings)
+    with TestClient(app) as client:
+        client.get(f"/agent?key={KEY}")
+        payload = client.get("/agent/api/status").json()
+        assert payload["auth_ok"] is False
+        assert payload["kind"] == "executor_offline"
+        assert "执行器" in payload["detail"]
+        assert "关机" in payload["detail"]
 
 
 def test_not_logged_in_still_goes_to_the_qr_page(settings, monkeypatch):

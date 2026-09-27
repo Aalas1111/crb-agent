@@ -24,6 +24,11 @@ Environment=PYTHONUNBUFFERED=1
 Environment=UV_CACHE_DIR=/var/lib/crb-agent/.uv-cache
 # crb / yqa 是 uv tool 装的，落在 ~/.local/bin —— 别依赖 systemd 的默认 PATH。
 Environment=PATH=/home/yuque/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# ⚠️ 服务器自己调不动学校接口（实测与出口 IP 无关，见 docs/deploy.md §0.1）：
+# 把 `crb` 交给**本机**的执行器执行，经 SSH 隧道往返。
+# 这是零代码改动 —— tools._split_bin 会用 shlex 把这个带空格的值拆成命令 + 参数。
+Environment="CRBA_CRB_BIN=/usr/bin/python3 /opt/crb-agent/scripts/remote_crb.py"
 # 会话留痕（一个会话一个 jsonl）。
 Environment=CRBA_WORKSPACE=/var/lib/crb-agent/workspace
 # 语雀侧的产出目录由 YQA_REPO 推出来（= <yuque_workspace>/<repo>/outbox）。

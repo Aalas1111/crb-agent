@@ -87,6 +87,10 @@ def crb(argv: list[str]) -> int:
     if mode == "missing":
         sys.stderr.write("找不到命令\n")
         return 127
+    if mode == "offline":
+        # 服务器侧的 crb 转发器用 4 表示「连不上本机执行器」（见 scripts/remote_crb.py）
+        sys.stderr.write("连不上本机的 crb 执行器。\n")
+        return 4
 
     if not argv:
         return 2

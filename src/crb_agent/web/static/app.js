@@ -31,14 +31,15 @@ async function loadStatus() {
       text.parentElement.onclick = null;
       return;
     }
-    // 「没登录」和「出口被拦」要分开说 —— 后者的出路不是扫码。
-    if (status.kind === "waf_blocked") {
-      text.textContent = "学校风控拦了服务器出口（扫码没用）—— 点这里看原因";
-    } else {
-      text.textContent = "登录态失效，点这里重新登录";
-    }
+    // 三种「用不了」的出路不同，分开说 —— 混成一句会让人对着解决不了的问题反复试。
+    const labels = {
+      not_logged_in: "登录态失效，点这里重新登录",
+      executor_offline: "本机执行器没连上（点这里看怎么起）",
+      waf_blocked: "被学校拦了（点这里看出路）",
+    };
+    text.textContent = labels[status.kind] || "用不了（点这里看原因）";
     text.parentElement.onclick = () => {
-      location.href = status.kind === "waf_blocked" ? "/agent" : "/agent/auth";
+      location.href = status.kind === "not_logged_in" ? "/agent/auth" : "/agent";
     };
   } catch (error) {
     dot.className = "dot bad";

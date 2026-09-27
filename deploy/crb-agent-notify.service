@@ -18,6 +18,11 @@ Environment=HOME=/home/yuque
 Environment=PYTHONUNBUFFERED=1
 Environment=UV_CACHE_DIR=/var/lib/crb-agent/.uv-cache
 Environment=PATH=/home/yuque/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# ⚠️ 服务器自己调不动学校接口（实测与出口 IP 无关，见 docs/deploy.md §0.1）：
+# 把 `crb` 交给**本机**的执行器执行，经 SSH 隧道往返。
+# 这是零代码改动 —— tools._split_bin 会用 shlex 把这个带空格的值拆成命令 + 参数。
+Environment="CRBA_CRB_BIN=/usr/bin/python3 /opt/crb-agent/scripts/remote_crb.py"
 Environment=CRBA_WORKSPACE=/var/lib/crb-agent/workspace
 Environment=CRBA_YUQUE_WORKSPACE=/var/lib/yuque-agent/workspace
 # 轮询间隔（秒）。审批是人手动点的，分钟级足够；学校接口又有风控。

@@ -4,31 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>被学校风控拦了 · 教室借用</title>
+<title>暂时用不了 · 教室借用</title>
 <link rel="stylesheet" href="/agent/static/style.css">
 </head>
 <body>
 <div class="center-page">
   <div class="card">
-    <h1>被学校风控拦了</h1>
-    <p><strong>这不是登录态的问题——扫码没有用。</strong>
-       登录态是好的，服务器也能打开办事大厅的页面，
-       但学校对<strong>接口调用</strong>按出口 IP 拦：机房/数据中心的 IP 会被拒。</p>
-
+    <h1 id="title">正在检查…</h1>
+    <p id="lead"></p>
     <div id="detail" style="font-size:12.5px;color:#9aa3b2;background:#12151b;
          border:1px solid #1e222b;border-radius:8px;padding:10px 12px;margin:0 0 16px">
       正在读取详情…
     </div>
-
-    <p style="font-size:13px;color:#9aa3b2">可以怎么办：</p>
-    <ul class="steps">
-      <li><strong>换一个出口</strong>：给服务配一个非机房的 HTTP 代理
-          （<code>HTTPS_PROXY</code>），让它从干净的 IP 出去。</li>
-      <li><strong>用浏览器插件</strong>：同学那个「活动工作台」在你自己的浏览器里跑，
-          出口就是你的网络，不受这条限制。</li>
-      <li><strong>把服务挪到干净的网络上</strong>（家宽 / 校园网里的机器）。</li>
-    </ul>
-
+    <div id="advice"></div>
     <button class="btn-ghost" id="btn-retry" type="button">重新检查</button>
   </div>
 </div>
@@ -36,17 +24,76 @@
 <script type="module">
 const $ = (id) => document.getElementById(id);
 
+// 三种「用不了」的出路完全不同，所以分开说 —— 混成一句会让人对着解决不了的问题反复试。
+const KINDS = {
+  executor_offline: {
+    title: "本机的执行器没连上",
+    lead: "调学校的命令要由**你自己的电脑**发出（服务器本身过不了那一步）。现在连不上它。",
+    advice: [
+      "<strong>在你自己的电脑上</strong>跑起执行器和隧道：<br>" +
+        "<code>python scripts/local_crb_executor.py 18890</code><br>" +
+        "<code>ssh -N -R 18890:127.0.0.1:18890 lihe@&lt;服务器&gt;</code>",
+      "或者跑一键脚本 <code>scripts/start_local_egress.sh</code>（见 docs/deploy.md §0.1）。",
+      "电脑没开机时界面仍然能用，只是调学校的工具会停在这里。",
+    ],
+  },
+  waf_blocked: {
+    title: "被学校拦了",
+    lead: "学校对办事大厅接口的判定不只看出口 IP，从服务器直接发起的请求会被拒。",
+    advice: [
+      "让请求从能过的机器发出：跑本机的执行器（见 docs/deploy.md §0.1）。",
+      "或者用同学那个浏览器插件 —— 它跑在你自己的浏览器里，天然不受这条限制。",
+    ],
+  },
+  not_logged_in: {
+    title: "需要登录",
+    lead: "登录态不可用，去扫码就能恢复。",
+    advice: [],
+  },
+  unknown: {
+    title: "暂时用不了",
+    lead: "登录态或学校那边有点问题，下面是具体原因。",
+    advice: [],
+  },
+};
+
+function render(kind, detail) {
+  const info = KINDS[kind] || KINDS.unknown;
+  $("title").textContent = info.title;
+  $("lead").innerHTML = info.lead;
+  $("detail").textContent = detail || "（没有更多细节）";
+  const box = $("advice");
+  box.textContent = "";
+  if (info.advice.length) {
+    const label = document.createElement("p");
+    label.style.cssText = "font-size:13px;color:#9aa3b2";
+    label.textContent = "可以怎么办：";
+    box.appendChild(label);
+    const list = document.createElement("ul");
+    list.className = "steps";
+    for (const item of info.advice) {
+      const li = document.createElement("li");
+      li.innerHTML = item;
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+  }
+}
+
 async function load() {
-  const box = $("detail");
   try {
     const status = await fetch("/agent/api/status").then((r) => r.json());
     if (status.auth_ok) {
       location.href = "/agent";
       return;
     }
-    box.textContent = `检测到：${status.detail || "（没有详情）"}`;
+    if (status.kind === "not_logged_in") {
+      location.href = "/agent/auth";
+      return;
+    }
+    render(status.kind || "unknown", status.detail);
   } catch (error) {
-    box.textContent = `读取详情失败：${error.message || error}`;
+    $("detail").textContent = `读取详情失败：${error.message || error}`;
   }
 }
 
