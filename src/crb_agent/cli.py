@@ -1,20 +1,25 @@
 """命令行入口。
 
-crba serve      起服务（agent 界面 + SSE）
-crba auth       在终端里走一次扫码登录（拿不到网页界面时用）
-crba doctor     自检：密钥、LLM key、登录态、crb/yqa 能不能叫得动
+crba serve          起服务（agent 界面 + SSE）
+crba auth           在终端里走一次扫码登录（拿不到网页界面时用）
+crba notify-poll    常驻轮询审批结果（systemd 单元，账本唯一写者）
+crba notify-once    只跑一轮审批结果检查（人工排查；与常驻共用一把锁）
+crba notify-show    打印审批结果账本概要
+crba doctor         自检：密钥、LLM key、登录态、crb/yqa 能不能叫得动
 crba version
 """
 
 from __future__ import annotations
 
+import random
 import sys
 import time
+from contextlib import contextmanager
 from typing import Annotated
 
 import typer
 
-from . import __version__, njuqr, server
+from . import __version__, njuqr, notify, server
 from .config import ConfigError, Settings, crb_auth_file
 from .prompts import system_prompt
 from .store import SessionStore
@@ -174,6 +179,167 @@ def doctor_cmd() -> None:
     typer.echo(f"       系统提示词 {len(prompt)} 字符（含今天的日期）")
     typer.echo()
     typer.secho("自检结束。", fg=typer.colors.GREEN)
+
+
+# ---------------------------------------------------------------- 审批结果
+#: 轮询间隔的抖动上限（秒）。别让请求整点撞在一起。
+JITTER = 60
+
+
+class AlreadyRunning(RuntimeError):
+    """另一个 notify 正在跑（账本只有一个写者）。"""
+
+
+class NotifyBlocked(RuntimeError):
+    """这一轮跑不了（登录态失效 / 被风控拦 / crb 叫不动）。``kind`` 说明是哪种。"""
+
+    def __init__(self, message: str, kind: str = "unknown") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+@contextmanager
+def _single_writer(settings: Settings):
+    """同一时刻只允许一个写者在跑（账本 / 文档都只有一个写者）。
+
+    上游那次事故的教训：两个写者会互相覆盖产物 —— 快照回退、重复通知。
+    所以常驻轮询和「手动跑一次」共用这把锁。
+    """
+    lock = settings.workspace / ".notify.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock.open("a+")
+    try:
+        try:
+            import fcntl
+        except ImportError:
+            # 非 POSIX（Windows 上本地开发）：不会并发，不锁。
+            yield
+            return
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise AlreadyRunning(f"另一个 notify 正在跑（拿不到 {lock}）") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _notify_round(settings: Settings, toolbox: Toolbox) -> dict:
+    """跑一轮：查申请列表 → 比对记账 → 重生文档 → 有变化才让语雀那篇也跟着重生。
+
+    **只读学校系统**：这里只调 ``borrow list``。别顺手加「自动重试提交」之类的东西。
+    """
+    outcome = toolbox.execute("crb_list_borrows", {})
+    if outcome.status != "ok":
+        raise NotifyBlocked(outcome.summary, str((outcome.data or {}).get("kind") or "unknown"))
+    rows = (outcome.data or {}).get("borrows") or []
+    result = notify.rebuild(
+        settings.approval_dir(), settings.outbox(), rows, repo=settings.yqa_repo
+    )
+    if result["new"]:
+        # 有变化才动语雀 —— 没变化时那边本来也不会变（approvaldoc 是幂等的），
+        # 省掉一次网络往返。
+        refreshed = toolbox.execute("yqa_refresh_approval", {})
+        result["yqa"] = refreshed.summary
+    return result
+
+
+def _describe(settings: Settings, result: dict) -> str:
+    parts = [
+        f"查了 {result['checked']} 条",
+        f"其中已结束 {result['ended_seen']} 条",
+        f"新增 {result['new']} 条",
+        f"通知文档共 {result['total']} 条",
+    ]
+    if result["unmatched"]:
+        parts.append(
+            f"认不出 {result['unmatched']} 条（见 {settings.approval_dir() / 'unmatched.json'}）"
+        )
+    if result.get("yqa"):
+        parts.append(str(result["yqa"]))
+    return "；".join(parts)
+
+
+@app.command("notify-once")
+def notify_once_cmd() -> None:
+    """跑一轮审批结果检查（记账 + 重生文档），然后退出。
+
+    人工排查用；常驻的那份是 `crba notify-poll`。两者共用一把锁。
+    """
+    settings = _settings()
+    toolbox = Toolbox(settings)
+    try:
+        with _single_writer(settings):
+            result = _notify_round(settings, toolbox)
+    except AlreadyRunning as exc:
+        typer.secho(str(exc), fg=typer.colors.YELLOW, err=True)
+        raise typer.Exit(2) from exc
+    except NotifyBlocked as exc:
+        typer.secho(f"这一轮跑不了：{exc}", fg=typer.colors.RED, err=True)
+        if exc.kind == "waf_blocked":
+            typer.echo("  被学校风控拦（出口 IP 的问题）—— 见 docs/deploy.md §0。")
+        elif exc.kind == "not_logged_in":
+            typer.echo("  登录态失效：打开 /agent 扫码，或跑 crba auth。")
+        raise typer.Exit(1) from exc
+    typer.secho(f"✓ {_describe(settings, result)}", fg=typer.colors.GREEN)
+
+
+@app.command("notify-poll")
+def notify_poll_cmd() -> None:
+    """常驻轮询审批结果（给 systemd；不要用 nohup 起）。"""
+    settings = _settings()
+    toolbox = Toolbox(settings)
+    interval = max(60, settings.notify_interval)
+    typer.secho(
+        f"notify 轮询开始：间隔 {interval}s（±{JITTER}s），产物 {settings.approval_dir()}",
+        fg=typer.colors.GREEN,
+    )
+    while True:
+        try:
+            with _single_writer(settings):
+                result = _notify_round(settings, toolbox)
+            typer.echo(_describe(settings, result))
+        except AlreadyRunning as exc:
+            typer.secho(str(exc), fg=typer.colors.YELLOW)
+        except NotifyBlocked as exc:
+            # 登录态失效/被拦**不是故障**：记一行，等下一轮。别刷屏、别退出。
+            hint = {
+                "waf_blocked": "（学校按出口 IP 拦，见 docs/deploy.md §0）",
+                "not_logged_in": "（等扫码）",
+            }.get(exc.kind, "")
+            typer.secho(f"跳过这一轮：{exc}{hint}", fg=typer.colors.YELLOW)
+        except Exception as exc:  # noqa: BLE001 - 常驻进程不能因为一轮出错就死
+            typer.secho(f"这一轮出错：{type(exc).__name__}: {exc}", fg=typer.colors.RED, err=True)
+        time.sleep(interval + random.uniform(-JITTER, JITTER))
+
+
+@app.command("notify-show")
+def notify_show_cmd() -> None:
+    """打印账本概要（不碰学校、不写文件）。"""
+    settings = _settings()
+    ledger = notify.read_ledger(settings.approval_dir())
+    if not ledger:
+        typer.echo(f"账本还是空的：{settings.approval_dir() / 'ledger.jsonl'}")
+        return
+    counts: dict[str, int] = {}
+    for entry in ledger:
+        key = str(entry.get("outcome") or "?")
+        counts[key] = counts.get(key, 0) + 1
+    label = {"approved": "已通过", "rejected": "已退回"}
+    for key, value in sorted(counts.items()):
+        typer.echo(f"  {label.get(key, key):6s} {value} 条")
+    typer.echo()
+    for entry in ledger:
+        snapshot = entry.get("snapshot") or {}
+        rooms = "、".join(entry.get("rooms") or [])
+        tail = f" 教室 {rooms}" if rooms else ""
+        typer.echo(
+            f"  {entry.get('first_seen_ended', '')[:16]}  {label.get(entry.get('outcome'), entry.get('outcome'))}"
+            f"  {notify.normalize_title(notify.text_of(snapshot, 'purpose'))}{tail}"
+        )
 
 
 def main() -> None:

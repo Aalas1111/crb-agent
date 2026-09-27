@@ -12,6 +12,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UNIT = (ROOT / "deploy" / "crb-agent.service").read_text(encoding="utf-8")
+NOTIFY_UNIT = (ROOT / "deploy" / "crb-agent-notify.service").read_text(encoding="utf-8")
+#: 两个单元共用的检查（本地测试与部署文档里都要盯）
+UNITS = {"crb-agent.service": UNIT, "crb-agent-notify.service": NOTIFY_UNIT}
 DEPLOY_DOC = (ROOT / "docs" / "deploy.md").read_text(encoding="utf-8")
 DEPLOY_SH = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
 SYNC_SH = (ROOT / "scripts" / "sync-server.sh").read_text(encoding="utf-8")
@@ -167,7 +170,7 @@ def test_deploy_sh_chowns_the_state_dir_to_the_service_user():
 def test_deploy_sh_survives_a_nonzero_is_active():
     """`systemctl is-active` 在服务没起来时返回非 0，而它在 `$(…)` 里赋值 ——
     裸着写会被 `set -e` 直接杀掉脚本，验收结果一行都打不出来（实测：退出码 3）。"""
-    assert 'systemctl is-active "$UNIT" || true' in DEPLOY_SH
+    assert 'systemctl is-active "$unit" || true' in DEPLOY_SH
 
 
 def test_git_runs_as_the_repo_owner():
@@ -263,3 +266,33 @@ def test_repo_does_not_contain_an_address_or_a_secret():
         bad = [ip for ip in found if ip not in _NOT_AN_ADDRESS]
         assert not bad, f"{path} 里有 IP：{bad}"
         assert "sk-" not in text, f"{path} 里疑似有 LLM key"
+
+
+def test_both_units_are_installed_and_verified():
+    """两个单元都要装、都要验收。
+
+    只装 Web 那个的话，审批结果轮询根本不会跑起来 —— 而「没跑」的表现是
+    「账本一直空的」，看起来像「还没有审批结束的申请」。
+    """
+    assert "crb-agent-notify.service" in DEPLOY_SH
+    assert "UNITS=(" in DEPLOY_SH
+    assert 'for unit in "${UNITS[@]}"' in DEPLOY_SH
+    # 各自的启动行都要验（「进程活着」不等于「它开始干活了」）
+    assert "crba 已启动" in DEPLOY_SH
+    assert "notify 轮询开始" in DEPLOY_SH
+
+
+def test_notify_unit_is_a_separate_process_and_the_only_ledger_writer():
+    """轮询单独一个单元：Web 重启不该打断跟踪，而且「谁是账本唯一写者」要一眼可见。"""
+    assert "crba notify-poll" in NOTIFY_UNIT
+    assert "Restart=always" in NOTIFY_UNIT
+    # 它要能写语雀产出目录里的 approval/（下游在那儿取件）
+    assert "/var/lib/yuque-agent/workspace" in NOTIFY_UNIT
+    assert "ReadWritePaths" in NOTIFY_UNIT
+
+
+def test_notify_unit_talks_to_yqa_the_same_way_as_the_web_unit():
+    """两个单元必须用同一个 yqa 检出，否则语雀侧会有两个版本各自更新。"""
+    for name, unit in UNITS.items():
+        assert "CRBA_YQA_BIN" in unit, f"{name} 没指定 yqa 怎么调"
+        assert "/opt/yuque-agent" in unit, f"{name} 指的 yqa 不是那个检出"

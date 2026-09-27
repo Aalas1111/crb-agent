@@ -27,7 +27,10 @@ LOG="$STATE/ops.log"
 LOCK="$STATE/.deploy.lock"
 WHO="${WHO:-$(whoami)@$(hostname -s)}"
 
-UNIT=crb-agent.service
+# 两个单元：Web 界面（密钥门）+ 审批结果轮询（账本是它唯一的写者）。
+WEB_UNIT=crb-agent.service
+NOTIFY_UNIT=crb-agent-notify.service
+UNITS=("$WEB_UNIT" "$NOTIFY_UNIT")
 
 # ⚠️ 所有 git 操作都**以仓库所有者（yuque）的身份**跑。
 # 这个脚本是 root 执行的，但检出归 yuque、部署密钥也在 /home/yuque/.ssh ——
@@ -86,50 +89,66 @@ trap 'rm -rf "$SANDBOX"' EXIT
 HOME="$SANDBOX" PYTHONPATH=src .venv/bin/python -m pytest -q
 
 say "systemd 单元与仓库对齐"
-install -m 644 "deploy/$UNIT" /etc/systemd/system/
-if [ -d "/etc/systemd/system/${UNIT}.d" ]; then
-  echo "⚠ 还有 drop-in：$(ls "/etc/systemd/system/${UNIT}.d")"
-  echo "  它会覆盖单元里的设置——确认后删掉"
-fi
+for unit in "${UNITS[@]}"; do
+  install -m 644 "deploy/$unit" /etc/systemd/system/
+  if [ -d "/etc/systemd/system/${unit}.d" ]; then
+    echo "⚠ $unit 还有 drop-in：$(ls "/etc/systemd/system/${unit}.d")"
+    echo "  它会覆盖单元里的设置——确认后删掉"
+  fi
+done
 systemctl daemon-reload
 
 say "重启单元"
-systemctl enable "$UNIT" >/dev/null
-systemctl restart "$UNIT"
-sleep 6
+for unit in "${UNITS[@]}"; do
+  systemctl enable "$unit" >/dev/null
+  systemctl restart "$unit"
+done
+sleep 8
 
 say "验收"
 RC=0
 
-state="$(systemctl is-active "$UNIT" || true)"
-printf '%-24s %s\n' "$UNIT" "$state"
-[ "$state" = "active" ] || RC=1
+for unit in "${UNITS[@]}"; do
+  state="$(systemctl is-active "$unit" || true)"
+  printf '%-26s %s\n' "$unit" "$state"
+  [ "$state" = "active" ] || RC=1
+done
 
-# 启动行：证明它真的跑到了「开始监听」那一步，而不只是进程还在。
-if journalctl -u "$UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "crba 已启动"; then
-  printf '%-24s %s\n' "启动行" "有"
+# 启动行：证明它真的跑到了「开始干活」那一步，而不只是进程还在。
+if journalctl -u "$WEB_UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "crba 已启动"; then
+  printf '%-26s %s\n' "web 启动行" "有"
 else
-  printf '%-24s %s\n' "启动行" "没有（journalctl -u $UNIT -n 50 看原因）"
+  printf '%-26s %s\n' "web 启动行" "没有（journalctl -u $WEB_UNIT -n 50 看原因）"
+  RC=1
+fi
+if journalctl -u "$NOTIFY_UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "notify 轮询开始"; then
+  printf '%-26s %s\n' "notify 启动行" "有"
+else
+  printf '%-26s %s\n' "notify 启动行" "没有（journalctl -u $NOTIFY_UNIT -n 50 看原因）"
   RC=1
 fi
 
 # 密钥门：不带密钥必须被拦。这是这个服务唯一的防线，所以要验它真的在拦，
 # 而不是「进程活着」就算过。
 if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/agent")" = "403" ]; then
-  printf '%-24s %s\n' "密钥门" "在拦（不带密钥 → 403）"
+  printf '%-26s %s\n' "密钥门" "在拦（不带密钥 → 403）"
 else
-  printf '%-24s %s\n' "密钥门" "「不带密钥」没被拦！立刻检查（journalctl -u $UNIT -n 50）"
+  printf '%-26s %s\n' "密钥门" "「不带密钥」没被拦！立刻检查（journalctl -u $WEB_UNIT -n 50）"
   RC=1
 fi
 if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/healthz")" = "200" ]; then
-  printf '%-24s %s\n' "/healthz" "ok"
+  printf '%-26s %s\n' "/healthz" "ok"
 else
-  printf '%-24s %s\n' "/healthz" "没反应"
+  printf '%-26s %s\n' "/healthz" "没反应"
   RC=1
 fi
 
-if journalctl -u "$UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "Traceback"; then
-  echo "⚠ 日志里有 Traceback —— 看 journalctl -u $UNIT -n 80" >&2
+if journalctl -u "$WEB_UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "Traceback"; then
+  echo "⚠ web 日志里有 Traceback —— 看 journalctl -u $WEB_UNIT -n 80" >&2
+  RC=1
+fi
+if journalctl -u "$NOTIFY_UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "Traceback"; then
+  echo "⚠ notify 日志里有 Traceback —— 看 journalctl -u $NOTIFY_UNIT -n 80" >&2
   RC=1
 fi
 

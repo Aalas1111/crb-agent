@@ -114,6 +114,32 @@ def _tail(text: str, limit: int = 400) -> str:
     return text[:limit] + ("…" if len(text) > limit else "")
 
 
+def _kind_for(code: int) -> str:
+    """crb 的退出码 → 我们内部的 ``kind``。
+
+    ``2`` 和 ``3`` **必须分开**：一个要人扫码，另一个扫码没用（学校按出口 IP
+    拦机房 IP）。混成一句「登录态不可用」会让人对着解决不了的问题反复扫码。
+    退出码语义见 crb 的 README。
+    """
+    return {0: "ok", 2: "not_logged_in", 3: "waf_blocked"}.get(code, "unknown")
+
+
+def _failure(summary: str, code: int, raw: str) -> ToolResult:
+    kind = _kind_for(code)
+    hint = ""
+    if kind == "waf_blocked":
+        hint = (
+            "学校按出口 IP 拦：机房 IP 会被拒，登录态本身没问题，扫码也没用。见 docs/deploy.md §0。"
+        )
+    elif kind == "not_logged_in":
+        hint = "需要重新扫码登录（打开 /agent 会跳到扫码页）。"
+    return ToolResult(
+        status="error",
+        summary=summary,
+        data={"exit_code": code, "kind": kind, "hint": hint, "output": _tail(raw)},
+    )
+
+
 # ---------------------------------------------------------------- 参数校验
 def _require_str(payload: dict[str, Any], key: str) -> str:
     value = payload.get(key)
@@ -421,6 +447,49 @@ class Toolbox:
         )
         self.register(
             Tool(
+                name="approval_status",
+                description=(
+                    "读「审批结果」账本：**已经审批结束**的申请（通过 / 退回）都在这里。"
+                    "用它回答「我那些申请批了没有 / 有没有被退回」。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "outcome": {
+                            "type": "string",
+                            "enum": ["all", "approved", "rejected"],
+                            "description": "只看某一类；默认 all",
+                        }
+                    },
+                    "required": [],
+                },
+                risk="read",
+                handler=self._approval_status,
+                guidelines=(
+                    "这是**本地账本**，由 crb-agent-notify 轮询维护 —— 新鲜度取决于轮询间隔"
+                    "（默认 10 分钟）。要「此刻最新的」，用 crb_list_borrows 直接问学校。",
+                    "没有教室的「已通过」不会记进这里（那种记录会被归到 unmatched 等人看）。",
+                ),
+            )
+        )
+        self.register(
+            Tool(
+                name="yqa_refresh_approval",
+                description=(
+                    "让语雀侧的 agent 把《审批结果》文档重建成最新（`yqa refresh-approval`）。"
+                    "审批结果变了之后由轮询调它；一般不用手调。"
+                ),
+                parameters={"type": "object", "properties": {}, "required": []},
+                risk="read",
+                handler=self._yqa_refresh_approval,
+                guidelines=(
+                    "它写的是**语雀知识库里那篇《审批结果》**，内容取自我们本地产出的 "
+                    "approval/notifications.json —— 所以要先有那一份。",
+                ),
+            )
+        )
+        self.register(
+            Tool(
                 name="crb_plan",
                 description=(
                     "按 plan.json 批量出借用方案 / 存草稿 / 正式提交。"
@@ -508,12 +577,12 @@ class Toolbox:
                         "output": _tail(raw),
                     },
                 )
-            return ToolResult(
-                status="error",
-                summary="登录态不可用（需要重新扫码登录）"
+            return _failure(
+                "登录态不可用（需要重新扫码登录）"
                 if code == 2
                 else f"crb doctor 失败（退出码 {code}）",
-                data={"exit_code": code, "kind": "not_logged_in", "output": _tail(raw)},
+                code,
+                raw,
             )
         return ToolResult(
             status="ok",
@@ -524,9 +593,7 @@ class Toolbox:
     def _dictionary(self, args: list[str]) -> ToolResult:
         code, data, raw = self._crb([*args, "--json"])
         if code != 0:
-            return ToolResult(
-                status="error", summary=f"取字典失败（退出码 {code}）", data={"output": _tail(raw)}
-            )
+            return _failure(f"取字典失败（退出码 {code}）", code, raw)
         return ToolResult(status="ok", summary=f"共 {len(data or [])} 项", data=data)
 
     def _crb_buildings(self, payload: dict[str, Any]) -> ToolResult:
@@ -551,9 +618,7 @@ class Toolbox:
             args += ["--room-type", room_type]
         code, data, raw = self._crb([*args, "--json"])
         if code != 0:
-            return ToolResult(
-                status="error", summary=f"查询失败（退出码 {code}）", data={"output": _tail(raw)}
-            )
+            return _failure(f"查询失败（退出码 {code}）", code, raw)
         rooms = data or []
         if not rooms:
             return ToolResult(status="ok", summary="该时段没有空闲教室", data={"rooms": []})
@@ -568,11 +633,7 @@ class Toolbox:
             args += ["--term", term]
         code, data, raw = self._crb([*args, "--json"])
         if code != 0:
-            return ToolResult(
-                status="error",
-                summary=f"取申请列表失败（退出码 {code}）",
-                data={"output": _tail(raw)},
-            )
+            return _failure(f"取申请列表失败（退出码 {code}）", code, raw)
         rows = data or []
         return ToolResult(
             status="ok",
@@ -666,6 +727,70 @@ class Toolbox:
             data=data,
         )
 
+    def _yqa_refresh_approval(self, _payload: dict[str, Any]) -> ToolResult:
+        args = ["refresh-approval", "--workspace", str(self.settings.yuque_workspace)]
+        if self.settings.yqa_repo:
+            args += ["--repo", self.settings.yqa_repo]
+        code, data, raw = self._yqa(args, timeout=TIMEOUT_PLAN)
+        if code != 0:
+            return ToolResult(
+                status="error",
+                summary=f"刷新《审批结果》失败（退出码 {code}）：{_tail(raw)}",
+                data={"exit_code": code, "output": _tail(raw)},
+            )
+        count = (data or {}).get("count") if isinstance(data, dict) else None
+        return ToolResult(
+            status="ok",
+            summary=f"《审批结果》已刷新（{count if count is not None else '?'} 条）",
+            data=data,
+        )
+
+    # ---- 审批结果（本地账本，只读）------------------------------------
+    def _approval_status(self, payload: dict[str, Any]) -> ToolResult:
+        from . import notify
+
+        try:
+            root = self.settings.approval_dir()
+        except ConfigError as exc:
+            raise ToolError(str(exc)) from exc
+        ledger = notify.read_ledger(root)
+        if not ledger:
+            return ToolResult(
+                status="ok",
+                summary="账本还是空的（还没有审批结束的申请）",
+                data={"counts": {}, "entries": [], "ledger": str(root / "ledger.jsonl")},
+            )
+        want = _optional_str(payload, "outcome") or "all"
+        counts: dict[str, int] = {}
+        for entry in ledger:
+            key = str(entry.get("outcome") or "?")
+            counts[key] = counts.get(key, 0) + 1
+        entries = []
+        for entry in ledger:
+            outcome = str(entry.get("outcome") or "?")
+            if want != "all" and outcome != want:
+                continue
+            snapshot = entry.get("snapshot") or {}
+            entries.append(
+                {
+                    "sqbh": entry.get("sqbh"),
+                    "outcome": outcome,
+                    "rooms": entry.get("rooms") or [],
+                    "feedback": entry.get("feedback") or notify.text_of(snapshot, "feedback"),
+                    "title": notify.normalize_title(notify.text_of(snapshot, "purpose")),
+                    "date": notify.text_of(snapshot, "date"),
+                    "slot": notify.text_of(snapshot, "period_start_text"),
+                    "detected_at": entry.get("first_seen_ended"),
+                }
+            )
+        label = {"approved": "已通过", "rejected": "已退回"}
+        parts = [f"{label.get(k, k)} {v} 条" for k, v in sorted(counts.items())]
+        return ToolResult(
+            status="ok",
+            summary="；".join(parts) or f"共 {len(ledger)} 条",
+            data={"counts": counts, "entries": entries, "legend": label},
+        )
+
     # ---- 写操作 --------------------------------------------------------
     def _crb_plan(self, payload: dict[str, Any]) -> ToolResult:
         mode = _require_choice(payload, "mode", ("preview", "save", "submit"))
@@ -686,11 +811,7 @@ class Toolbox:
 
         code, data, raw = self._crb(args, timeout=TIMEOUT_PLAN)
         if code != 0 and data is None:
-            return ToolResult(
-                status="error",
-                summary=f"crb plan 失败（退出码 {code}）：{_tail(raw)}",
-                data={"exit_code": code, "output": _tail(raw, 1500)},
-            )
+            return _failure(f"crb plan 失败（退出码 {code}）：{_tail(raw)}", code, raw)
         payload_out = data if isinstance(data, dict) else {"assignments": data}
         assignments = payload_out.get("assignments") or []
         results = payload_out.get("results") or []
@@ -730,11 +851,7 @@ class Toolbox:
         code, data, raw = self._crb([*args, "--json"])
         label = {"submit": "提交", "withdraw": "撤回", "delete": "删除", "edit": "修改"}[action]
         if code != 0:
-            return ToolResult(
-                status="error",
-                summary=f"{sqbh} {label}失败（退出码 {code}）：{_tail(raw)}",
-                data={"exit_code": code},
-            )
+            return _failure(f"{sqbh} {label}失败（退出码 {code}）：{_tail(raw)}", code, raw)
         ok = bool((data or {}).get("ok")) if isinstance(data, dict) else code == 0
         message = (data or {}).get("msg") if isinstance(data, dict) else None
         return ToolResult(

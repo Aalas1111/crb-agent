@@ -21,6 +21,10 @@ DEFAULT_MODEL = "deepseek-flash"
 DEFAULT_PORT = 8788
 """8787 是 ``yqa serve-plan`` 的下载口（公开、无鉴权），别再占它。"""
 
+DEFAULT_NOTIFY_INTERVAL = 600
+"""审批结果轮询间隔（秒）。审批是老师手动点的，分钟级足够；学校接口又有风控，
+没必要更密。"""
+
 
 class ConfigError(RuntimeError):
     """配置缺失/不合法——比任何网络错误都更早一步。"""
@@ -78,9 +82,24 @@ class Settings:
     outbox_override: Path | None = None
     """直接指定 outbox 目录（``CRBA_OUTBOX``）。留空就按 ``yqa`` 的目录约定推。"""
 
+    notify_interval: int = DEFAULT_NOTIFY_INTERVAL
+    """审批结果轮询间隔（秒）。审批是老师手动点的，分钟级足够；学校接口又有风控。"""
+
     @property
     def crb_auth_file(self) -> Path:
         return crb_auth_file()
+
+    @property
+    def repo_slug(self) -> str:
+        """``YQA_REPO`` 在**工作区里的目录名**。
+
+        上游 ``yqa`` 的约定是 ``self.repo.replace("/", "_")``（见它的
+        ``config.Settings.slug``），所以 ``ghxd00/jsjysq`` → ``ghxd00_jsjysq``。
+        ⚠️ 不是取末段：取末段会得到 ``jsjysq``，那个目录根本不存在 ——
+        而失败的表现是「产出目录不存在」，看起来像语雀侧还没干活。
+        （实测踩到过；测试夹具当时用的是不含斜杠的 repo，把这个 bug 盖住了。）
+        """
+        return self.yqa_repo.replace("/", "_").strip()
 
     def outbox(self) -> Path:
         """``yqa`` 的产出目录：``<yuque_workspace>/<repo slug>/outbox``。
@@ -91,14 +110,17 @@ class Settings:
         """
         if self.outbox_override is not None:
             return self.outbox_override
-        slug = self.yqa_repo.split("/")[-1].strip()
-        if not slug:
+        if not self.repo_slug:
             raise ConfigError(
                 "推不出语雀产出目录：没有配置知识库。\n"
                 "设 YQA_REPO=<group>/<repo>（就是语雀地址里那两段），"
                 "或用 CRBA_OUTBOX 直接指向 outbox 目录。"
             )
-        return self.yuque_workspace / slug / "outbox"
+        return self.yuque_workspace / self.repo_slug / "outbox"
+
+    def approval_dir(self) -> Path:
+        """审批结果的产物目录（账本 / 对外通知 / unmatched 都在这儿）。"""
+        return self.outbox() / "approval"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -124,6 +146,9 @@ class Settings:
             crb_bin=_first(os.environ.get("CRBA_CRB_BIN"), "crb"),
             yqa_bin=_first(os.environ.get("CRBA_YQA_BIN"), "yqa"),
             yqa_repo=_first(os.environ.get("YQA_REPO")),
+            notify_interval=int(
+                _first(os.environ.get("CRBA_NOTIFY_INTERVAL")) or DEFAULT_NOTIFY_INTERVAL
+            ),
             workspace=_env_path("CRBA_WORKSPACE", Path.cwd() / "workspace"),
             yuque_workspace=_env_path(
                 "CRBA_YUQUE_WORKSPACE", Path("/var/lib/yuque-agent/workspace")

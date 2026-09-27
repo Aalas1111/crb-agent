@@ -1,0 +1,49 @@
+[Unit]
+Description=crb-agent 审批结果轮询（查申请列表 → 记账 → 重生通知文档 → 让语雀那篇跟着更新）
+Documentation=file:/opt/crb-agent/docs/deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yuque
+Group=yuque
+WorkingDirectory=/opt/crb-agent
+
+# 凭证与 Web 端完全同源（复用 yuque-agent 那份 + 本项目自己的 CRBA_KEY）。
+EnvironmentFile=/home/yuque/.yuque/agent.env
+EnvironmentFile=-/home/yuque/.crb-agent/env
+
+Environment=HOME=/home/yuque
+Environment=PYTHONUNBUFFERED=1
+Environment=UV_CACHE_DIR=/var/lib/crb-agent/.uv-cache
+Environment=PATH=/home/yuque/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CRBA_WORKSPACE=/var/lib/crb-agent/workspace
+Environment=CRBA_YUQUE_WORKSPACE=/var/lib/yuque-agent/workspace
+# 轮询间隔（秒）。审批是人手动点的，分钟级足够；学校接口又有风控。
+Environment=CRBA_NOTIFY_INTERVAL=600
+# 值里有空格，必须整段加引号（systemd 在 Environment= 里把空格当多个赋值）。
+Environment="CRBA_YQA_BIN=uv run --no-sync --project /opt/yuque-agent yqa"
+
+ExecStart=/usr/local/bin/uv run --no-sync crba notify-poll
+
+Restart=always
+RestartSec=30
+# systemctl stop 时 Python 以 143（SIGTERM）退出，那是正常停止，不是故障。
+SuccessExitStatus=143
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/crb-agent
+# ⚠️ 这里对语雀产出目录是**可写**的：账本与通知文档要落在 `<outbox>/approval/`
+# 里（那是下游取件的地方，负责人定的）。精确到那个子目录会让单元里出现
+# 部署相关的 slug（不该写进仓库），所以放开到 workspace，靠代码只写 approval/。
+ReadWritePaths=/var/lib/yuque-agent/workspace
+ReadOnlyPaths=-/home/yuque/.crb -/home/yuque/.yuque
+
+[Install]
+WantedBy=multi-user.target

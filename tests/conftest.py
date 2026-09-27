@@ -56,7 +56,12 @@ def workspace(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def yuque_workspace(tmp_path: Path) -> Path:
-    """造一个像 ``yqa`` 那样的产出目录（含一个 plan.json）。"""
+    """造一个像 ``yqa`` 那样的产出目录（含一个 plan.json）。
+
+    目录名必须用 ``ghxd00_jsjysq`` 这种**下划线**形式，而 ``YQA_REPO`` 是
+    ``ghxd00/jsjysq``（斜杠）—— 这正是生产上的真实形状。
+    早先夹具用不带斜杠的 repo，把「按末段推目录名」的 bug 盖住了。
+    """
     outbox = tmp_path / "yq" / "ghxd00_jsjysq" / "outbox"
     outbox.mkdir(parents=True)
     (outbox / "plan.json").write_text(
@@ -100,7 +105,7 @@ def settings(workspace: Path, yuque_workspace: Path) -> Settings:
         llm_model="test-model",
         crb_bin=_fake("crb"),
         yqa_bin=_fake("yqa"),
-        yqa_repo="ghxd00_jsjysq",
+        yqa_repo="ghxd00/jsjysq",
         workspace=workspace,
         yuque_workspace=yuque_workspace,
     )

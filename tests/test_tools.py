@@ -270,7 +270,7 @@ def test_yqa_refresh_plan_passes_workspace_and_repo(settings, crb_args):
     assert argv[0] == "yqa"
     assert argv[1] == "export-plan"
     assert "--workspace" in argv
-    assert "--repo" in argv and "ghxd00_jsjysq" in argv
+    assert "--repo" in argv and "ghxd00/jsjysq" in argv
 
 
 def test_yqa_refresh_plan_rejects_bad_defaults(settings):
@@ -284,3 +284,27 @@ def test_yqa_failure_is_reported(settings, monkeypatch):
     result = Toolbox(settings).execute("yqa_refresh_plan", {})
     assert result.status == "error"
     assert "刷新清单失败" in result.summary
+
+
+def test_repo_slug_uses_underscores_not_the_last_segment(settings):
+    """``YQA_REPO=group/repo`` 在工作区里的目录名是 ``group_repo``（下划线）。
+
+    上游 ``yqa`` 的约定是 ``self.repo.replace("/", "_")``。早先我们按末段推，
+    得到 ``jsjysq`` —— 那个目录不存在，而失败表现是「产出目录不存在」，
+    看起来像语雀侧还没干活。（测试夹具当时用不带斜杠的 repo，把 bug 盖住了。）
+    """
+    from dataclasses import replace
+
+    assert settings.yqa_repo == "ghxd00/jsjysq"
+    assert settings.repo_slug == "ghxd00_jsjysq"
+    assert settings.outbox().name == "outbox"
+    assert settings.outbox().parent.name == "ghxd00_jsjysq"
+    assert settings.outbox().is_dir(), "夹具造的目录应该正好被推出来"
+
+    # 不带斜杠时也照样能推（有些人就填一个名字）
+    plain = replace(settings, yqa_repo="jsjysq")
+    assert plain.repo_slug == "jsjysq"
+
+
+def test_approval_dir_lives_under_the_outbox(settings):
+    assert settings.approval_dir() == settings.outbox() / "approval"
