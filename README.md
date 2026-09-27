@@ -94,6 +94,16 @@ uv run crba serve                     # → http://127.0.0.1:8788/agent?key=…
 
 ---
 
+## 相关文档
+
+| 文件 | 内容 |
+|---|---|
+| [`docs/design.md`](docs/design.md) | 为什么长这样：agent loop / 事件契约 / 登录态 / 前端取舍 |
+| [`docs/deploy.md`](docs/deploy.md) | 部署真相与**暴露面**（§10） |
+| [`docs/principles.md`](docs/principles.md) | 判断归 LLM、程序不越界 |
+| [`docs/compat-browser-plugin.md`](docs/compat-browser-plugin.md) | 与同学的浏览器插件（活动工作台）的能力对照与共存分析 |
+| [`docs/proposal-approval-notifications.md`](docs/proposal-approval-notifications.md) | 待评审：审批结果轮询与分发（本轮未实现） |
+
 ## 开发
 
 ```bash
