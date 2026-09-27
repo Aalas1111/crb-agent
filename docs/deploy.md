@@ -13,46 +13,54 @@
 | `/var/lib/crb-agent/.uv-cache` | uv 缓存 |
 | `/etc/systemd/system/crb-agent.service` | 生效的单元（权威副本在 `deploy/`） |
 | `/home/yuque/.crb/auth.json` | 学校登录态 ← **和 `crb` 用的是同一个文件** |
-| `/home/yuque/.yuque/agent.env` | `DEEPSEEK_API_KEY` 等（复用 `yuque-agent` 那份） |
-| `/home/yuque/.crb-agent/env` | 本项目自己的：`CRBA_KEY`、`YQA_REPO` |
+| `/home/yuque/.yuque/agent.env` | `DEEPSEEK_API_KEY`、`YQA_REPO`（复用 `yuque-agent` 那份） |
+| `/home/yuque/.crb-agent/env` | 本项目自己的：只有 `CRBA_KEY` |
 | `/var/lib/yuque-agent/workspace/` | 语雀侧的产出（只读）。`plan.json` 从这里取 |
 
 **只有一个单元**：`crb-agent.service`。它是网页界面 + agent 循环的那个进程。
 
 ## 2. 依赖
 
-三样东西，都不由本项目托管：
+三样东西：
 
 ```bash
 # 1) crb —— 教室借用 CLI（和语雀侧的 yuque-agent 各自独立）
-uv tool install "git+https://github.com/Aalas1111/NJU_Classroom_Booking"
+#    服务器能连 GitHub 时直接装；装到 /home/yuque/.local/bin/crb
+sudo -u yuque env HOME=/home/yuque uv tool install \
+    "git+https://github.com/Aalas1111/NJU_Classroom_Booking"
 
-# 2) yqa —— 语雀侧的 agent（用来刷新 plan.json）
-uv tool install "git+https://github.com/Aalas1111/nju-yuque-agent"
+# 2) yqa —— **不要再装一份**。它已经在 /opt/yuque-agent 里，
+#    单元用 `uv run --no-sync --project /opt/yuque-agent yqa` 直接指过去，
+#    这样两个服务共用同一个检出，版本不会漂。
+sudo -u yuque env HOME=/home/yuque /usr/local/bin/uv run \
+    --no-sync --project /opt/yuque-agent yqa version     # 验证能跑
 
 # 3) 本项目
-cd /opt/crb-agent && uv sync
+sudo -u yuque env HOME=/home/yuque /usr/local/bin/uv sync --project /opt/crb-agent
 ```
 
-两个 CLI 都落在 `/home/yuque/.local/bin`，单元里显式加了这条 PATH
+`crb` 落在 `/home/yuque/.local/bin`，单元里显式加了这条 PATH
 （systemd 的默认 PATH 里没有它）。
+
+> `crb login`（Playwright 那套）在生产机上**用不到** —— 登录态由本服务的
+> 扫码流程维护（§6）。所以不需要装 `[login]` 额外依赖，也不需要在服务器上
+> 装浏览器。
 
 ## 3. 凭证
 
 | 变量 | 放哪 | 怎么来 |
 |---|---|---|
 | `CRBA_KEY` | `/home/yuque/.crb-agent/env` | **你自己定**一个长随机串。这是这个服务唯一的防线 |
-| `YQA_REPO` | `/home/yuque/.crb-agent/env` | 语雀知识库，`<group>/<repo>` 两段。**必须和 `yuque-agent` 配的一致** |
 | `DEEPSEEK_API_KEY` | `/home/yuque/.yuque/agent.env` | 已存在，**复用**，不新开一份 |
+| `YQA_REPO` | `/home/yuque/.yuque/agent.env` | 已存在（`ghxd00_jsjysq` 所属的知识库）——**同一个变量**，本项目直接读它，不重复配 |
 | 学校登录态 | `/home/yuque/.crb/auth.json` | 网页上扫码（见 §6），或 `crba auth` |
 
-建本项目的那个文件：
+所以本项目自己的文件里**只放一件东西**：
 
 ```bash
 sudo install -d -o yuque -g yuque -m 750 /home/yuque/.crb-agent
 sudo tee /home/yuque/.crb-agent/env >/dev/null <<'EOF'
 CRBA_KEY=<换成一个长随机串>
-YQA_REPO=<group>/<repo>
 EOF
 sudo chown yuque:yuque /home/yuque/.crb-agent/env
 sudo chmod 600 /home/yuque/.crb-agent/env
@@ -63,8 +71,7 @@ sudo chmod 600 /home/yuque/.crb-agent/env
 > 不该有「没配就裸奔」的中间状态。
 >
 > `YQA_REPO` 决定 `plan.json` 在哪（`<yuque_workspace>/<repo>/outbox/plan.json`）。
-> 不加 `CRBA_OUTBOX` 就是因为这一个变量同时喂给 `outbox()` 和 `yqa export-plan`，
-> 少一处会对不上的配置。
+> 它和 `yuque-agent` 读的是**同一个变量**，所以天然一致，没有第二处要对。
 
 ## 4. 首次部署
 

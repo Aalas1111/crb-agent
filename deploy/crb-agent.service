@@ -28,6 +28,12 @@ Environment=PATH=/home/yuque/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=CRBA_WORKSPACE=/var/lib/crb-agent/workspace
 # 语雀侧的产出目录由 YQA_REPO 推出来（= <yuque_workspace>/<repo>/outbox）。
 Environment=CRBA_YUQUE_WORKSPACE=/var/lib/yuque-agent/workspace
+# 语雀侧的 CLI 没有被装成全局命令，而是在它自己的检出里用 uv 跑。
+# 指过去（而不是再 `uv tool install` 一份）是刻意的：**让两个服务用同一个检出**，
+# 版本与文案天然一致，也不会出现「两处都要更新」。
+# 值里有空格，由 crb-agent 自己用 shlex 拆（见 tools._split_bin）。
+Environment=CRBA_YQA_BIN=uv run --no-sync --project /opt/yuque-agent yqa
+
 # 8787 是 yqa serve-plan 的下载口（公开、无鉴权），这个服务用 8788。
 Environment=CRBA_PORT=8788
 
