@@ -37,6 +37,9 @@ die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 
 say "取部署锁（$LOCK）"
 mkdir -p "$STATE"
+# uv 的缓存目录：单元里用 UV_CACHE_DIR 指到这里（别去写 yuque 用户的 ~/.cache）。
+mkdir -p "$STATE/.uv-cache"
+chown yuque:yuque "$STATE/.uv-cache" 2>/dev/null || true
 exec 9>"$LOCK"
 flock -n 9 || die "另一个部署正在进行（$LOCK 被占用）。等它结束再来，别抢同一个工作区。"
 

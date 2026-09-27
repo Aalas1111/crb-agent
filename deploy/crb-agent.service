@@ -31,8 +31,11 @@ Environment=CRBA_YUQUE_WORKSPACE=/var/lib/yuque-agent/workspace
 # 语雀侧的 CLI 没有被装成全局命令，而是在它自己的检出里用 uv 跑。
 # 指过去（而不是再 `uv tool install` 一份）是刻意的：**让两个服务用同一个检出**，
 # 版本与文案天然一致，也不会出现「两处都要更新」。
-# 值里有空格，由 crb-agent 自己用 shlex 拆（见 tools._split_bin）。
-Environment=CRBA_YQA_BIN=uv run --no-sync --project /opt/yuque-agent yqa
+#
+# ⚠️ 值里有空格，**必须用引号包住整个赋值**：systemd 在 `Environment=` 里
+# 把空格当「多个赋值」的分隔符，不加引号会变成一堆 `Invalid environment
+# assignment, ignoring: run` 之类的告警，然后那个变量根本没设上（实测踩过）。
+Environment="CRBA_YQA_BIN=uv run --no-sync --project /opt/yuque-agent yqa"
 
 # 8787 是 yqa serve-plan 的下载口（公开、无鉴权），这个服务用 8788。
 Environment=CRBA_PORT=8788
@@ -54,7 +57,11 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 # 放宽一项：要读 ~/.crb/auth.json（登录态）与语雀产出目录。
 ReadWritePaths=/var/lib/crb-agent
-ReadOnlyPaths=/var/lib/yuque-agent/workspace /home/yuque/.crb /home/yuque/.yuque
+# 路径前那个 `-` 是「不存在就跳过」。`~/.crb/` 在第一次扫码之前**不存在**，
+# 而 ReadOnlyPaths 碰到不存在的路径会让 systemd 建命名空间失败
+# （status=226/NAMESPACE，实测踩过）。这两条路径都归别的项目管，
+# 不该因为它们的出现时序把我的服务挡在门外。
+ReadOnlyPaths=-/var/lib/yuque-agent/workspace -/home/yuque/.crb -/home/yuque/.yuque
 
 [Install]
 WantedBy=multi-user.target

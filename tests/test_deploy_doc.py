@@ -85,6 +85,51 @@ def test_deploy_sh_writes_an_ops_log():
     assert "ops.log" in DEPLOY_SH
 
 
+def test_unit_quotes_environment_values_that_contain_spaces():
+    """systemd 在 ``Environment=`` 里把空格当**多个赋值**的分隔符。
+
+    所以 `Environment=VAR=uv run ...` 会被拆成 `VAR=uv` 加一串
+    `Invalid environment assignment, ignoring: run/...` —— 告警刷屏，
+    而那个变量根本没设上。首次部署时实测踩到这个：`CRBA_YQA_BIN` 丢了，
+    agent 一调 yqa 就报「找不到命令」。值里有空格就必须用引号包住整个赋值。
+    """
+    for line in UNIT.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("Environment="):
+            continue
+        value = stripped[len("Environment=") :].strip()
+        if value.startswith('"') and value.endswith('"'):
+            continue
+        assert " " not in value, (
+            f"`{stripped}` 的值里有空格但没加引号 —— systemd 会把它当成多个赋值。"
+            f'改成 Environment="…" 的形式。'
+        )
+
+
+def test_readonly_paths_tolerate_paths_that_appear_later():
+    """外部项目的路径要带 ``-`` 前缀（不存在就跳过）。
+
+    `~/.crb/` 在第一次扫码之前不存在，而 ReadOnlyPaths 遇到不存在的路径会让
+    systemd 建命名空间失败（226/NAMESPACE），服务根本起不来 —— 那三条路径都
+    归别的项目管，不该因为它们的出现时序把我们的服务挡在门外。
+    """
+    readonly = [
+        line.strip() for line in UNIT.splitlines() if line.strip().startswith("ReadOnlyPaths=")
+    ]
+    assert readonly, "单元里应该有 ReadOnlyPaths（收紧文件系统视野）"
+    for line in readonly:
+        for path in line[len("ReadOnlyPaths=") :].split():
+            assert path.startswith("-") or path.startswith("/var/lib/crb-agent"), (
+                f"{path} 是别的项目管的路径，前面要加 `-`（不存在就跳过）"
+            )
+
+
+def test_deploy_sh_creates_the_uv_cache_dir():
+    """单元把 UV_CACHE_DIR 指到 state 目录，deploy.sh 得先把它建出来。"""
+    assert ".uv-cache" in DEPLOY_SH
+    assert ".uv-cache" in UNIT
+
+
 def test_sync_server_refuses_to_run_on_the_production_checkout():
     assert "/opt/crb-agent" in SYNC_SH
     assert "生产机的检出" in SYNC_SH
