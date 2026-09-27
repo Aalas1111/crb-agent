@@ -296,3 +296,18 @@ def test_notify_unit_talks_to_yqa_the_same_way_as_the_web_unit():
     for name, unit in UNITS.items():
         assert "CRBA_YQA_BIN" in unit, f"{name} 没指定 yqa 怎么调"
         assert "/opt/yuque-agent" in unit, f"{name} 指的 yqa 不是那个检出"
+
+
+def test_deploy_sh_never_pipes_journalctl_into_grep_q():
+    """`set -o pipefail` + `grep -q` 是间歇性误报的来源。
+
+    `grep -q` 一找到匹配就退出 → 上游的 `journalctl` 吃到 SIGPIPE(141) →
+    管道整体返回非 0 → `if` 判为假 → 验收报「启动行没有」，而日志里明明有。
+    日志量大的时候才触发，所以看起来像随机失败。用命令替换接住输出再判空。
+    """
+    for line in _code_lines(DEPLOY_SH).splitlines():
+        if "journalctl" in line and "grep -q" in line:
+            raise AssertionError(f"`journalctl | grep -q` 会在 pipefail 下误报：\n  {line.strip()}")
+    # 正向：那一行「有/没有」的判定必须靠接住的输出
+    assert "WEB_START=" in DEPLOY_SH
+    assert "NOTIFY_START=" in DEPLOY_SH

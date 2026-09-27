@@ -115,13 +115,19 @@ for unit in "${UNITS[@]}"; do
 done
 
 # 启动行：证明它真的跑到了「开始干活」那一步，而不只是进程还在。
-if journalctl -u "$WEB_UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "crba 已启动"; then
+# ⚠️ 不要写成 `journalctl … | grep -q "…"`：`set -o pipefail` 下，
+# grep 一找到就退出 → journalctl 吃到 SIGPIPE(141) → 管道整体非 0 → 条件判为假，
+# 于是间歇性误报「启动行没有」（日志量大的时候才触发，实测踩到）。用命令替换把
+# 输出接住再判空，`|| true` 兜住退出码。
+WEB_START="$(journalctl -u "$WEB_UNIT" --since "-3min" --no-pager 2>/dev/null | grep "crba 已启动" || true)"
+if [ -n "$WEB_START" ]; then
   printf '%-26s %s\n' "web 启动行" "有"
 else
   printf '%-26s %s\n' "web 启动行" "没有（journalctl -u $WEB_UNIT -n 50 看原因）"
   RC=1
 fi
-if journalctl -u "$NOTIFY_UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "notify 轮询开始"; then
+NOTIFY_START="$(journalctl -u "$NOTIFY_UNIT" --since "-3min" --no-pager 2>/dev/null | grep "notify 轮询开始" || true)"
+if [ -n "$NOTIFY_START" ]; then
   printf '%-26s %s\n' "notify 启动行" "有"
 else
   printf '%-26s %s\n' "notify 启动行" "没有（journalctl -u $NOTIFY_UNIT -n 50 看原因）"
@@ -143,11 +149,13 @@ else
   RC=1
 fi
 
-if journalctl -u "$WEB_UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "Traceback"; then
+TRACEBACK="$(journalctl -u "$WEB_UNIT" --since "-3min" --no-pager 2>/dev/null | grep "Traceback" || true)"
+if [ -n "$TRACEBACK" ]; then
   echo "⚠ web 日志里有 Traceback —— 看 journalctl -u $WEB_UNIT -n 80" >&2
   RC=1
 fi
-if journalctl -u "$NOTIFY_UNIT" --since "-3min" --no-pager 2>/dev/null | grep -q "Traceback"; then
+NOTIFY_TB="$(journalctl -u "$NOTIFY_UNIT" --since "-3min" --no-pager 2>/dev/null | grep "Traceback" || true)"
+if [ -n "$NOTIFY_TB" ]; then
   echo "⚠ notify 日志里有 Traceback —— 看 journalctl -u $NOTIFY_UNIT -n 80" >&2
   RC=1
 fi
